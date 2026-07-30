@@ -122,13 +122,16 @@ def make_tag_udf():
 
     attr_cols = SENT_ATTRS + META_ATTRS
 
+    # Pass the text + attribute columns as a single struct so the pandas_udf has
+    # exactly one fully type-hinted parameter (Spark rejects untyped/variadic
+    # args). The struct arrives as a DataFrame with columns [words, *attr_cols].
     @pandas_udf(StringType())
-    def tag_udf(words: pd.Series, *attr_series) -> pd.Series:
+    def tag_udf(payload: pd.DataFrame) -> pd.Series:
         tg = _tagger()
         out = []
-        for i in range(len(words)):
-            text = words.iloc[i] or ""
-            attrs = {attr_cols[j]: (attr_series[j].iloc[i]) for j in range(len(attr_cols))}
+        for _, row in payload.iterrows():
+            text = row["words"] or ""
+            attrs = {c: row[c] for c in attr_cols}
             in_scope, _ = tg.in_scope(text, attrs)
             topics = tg.tag(text, attrs) if in_scope else {}
             out.append(json.dumps({
@@ -160,8 +163,13 @@ def run():
     df = load_and_join(spark, params)
     tag_udf, attr_cols = make_tag_udf()
 
-    tagged = df.withColumn(
-        "_tag_json", tag_udf(F.col(TEXT_FIELD), *[F.col(c) for c in attr_cols]))
+    # Build the struct payload: words + each attribute column (aliased so the
+    # UDF's DataFrame has stable column names). Missing metadata cols -> null.
+    payload_cols = [F.col(TEXT_FIELD).alias("words")]
+    for c in attr_cols:
+        payload_cols.append(
+            (F.col(c) if c in df.columns else F.lit(None).cast("string")).alias(c))
+    tagged = df.withColumn("_tag_json", tag_udf(F.struct(*payload_cols)))
 
     result_schema = StructType([
         StructField("in_scope", BooleanType()),

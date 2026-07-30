@@ -1,0 +1,36 @@
+# Databricks Asset Bundle for the GM VOC topic-model POC.
+#
+# Deploy:   databricks bundle deploy  -t sandbox -p daria_k_sandbox
+# Run:      databricks bundle run voc_topic_model_job -t sandbox -p daria_k_sandbox
+# Destroy:  databricks bundle destroy -t sandbox -p daria_k_sandbox
+bundle:
+  name: gm_voc_topic_model
+
+# Ship the engine + rules alongside the job so imports resolve on the cluster.
+include: []
+
+targets:
+  sandbox:
+    mode: development
+    default: true
+    workspace:
+      host: https://adb-984752964297111.11.azuredatabricks.net
+
+resources:
+  jobs:
+    voc_topic_model_job:
+      name: "[${bundle.target}] GM VOC Topic Model"
+      tasks:
+        - task_key: tag_verbatims
+          # Serverless: no cluster to configure. Uses the workspace default.
+          notebook_task:
+            notebook_path: ./topic_model/run_job_notebook.py
+            base_parameters:
+              sentence_table: daria_krasavina.gm_voc.qualtrics_audio_transcripts_sentence_level_sample_data
+              metadata_table: daria_krasavina.gm_voc.qualtrics_audio_transcripts_metadata_sample_data
+              tags_table: daria_krasavina.gm_voc.voc_topic_tags
+              freq_table: daria_krasavina.gm_voc.voc_topic_frequencies
+              date_start: "2025-07-01"
+              date_end: "2026-06-30"
+      queue:
+        enabled: true

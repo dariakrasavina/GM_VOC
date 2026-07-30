@@ -1,0 +1,160 @@
+{
+  "source_workbook": "requirements/Qualtrics_Parent_and_Leaf_Nodes.xlsx",
+  "global_filter": {
+    "name": "DBX POC",
+    "description": "All English contact center call transcripts excluding agent side of conversation",
+    "lanes": {
+      "keywords": "*",
+      "and": "_id_source:audio",
+      "and2": "language:english",
+      "not": "_verbatimtype:agentverbatim, ((_id_source:\"audio\") AND (\"please hold while\", \"hold on while I transfer you\", \"please remain on the line\", \"for holding\", \"I have a member\", \"I have a customer\", \"this customer\", ((\"the customer\") NOT (\"the customer service\", \"as the customer\", \"the customer assistance\", \"the customer representative\", \"the customer support\", \"the customer agent\")), \"the member\", \"this member\", \"how may I assist\", \"how can I help you\", \"our website\", \"our web site\", \"our inventory\"~2, \"your home\", ((\"I am an advisor\"~2, \"I am a technician\"~2) NOT (\"I am waiting\")), \"to speak with a\", ((\"to transfer you\"~2, \"to transfer call\"~2, \"transfer you to\"~2, \"transfer call to\"~2) NOT (\"transfer me\")), \"are you in need of\", \"when you speak with us today\", \"convenient way to shop for\", \"press one\", \"press two\", \"press three\", \"press four\", \"press five\", \"press six\", \"press seven\", \"press eight\", \"press nine\", \"press zero\", \"we know your time is valuable\", \"instead of waiting on hold\", \"continue by text message\", \"if you are calling from\", \"we will send you a text to start\", \"the next available customer experience team member will\", \"standard data rates and fees may apply\", \"to continue over the phone\", \"you do not appear to be calling from\", \"if you wish to communicate via text\", \"please call back on a text compatible device\", \"please stay on the line\", \"I see you are calling from\", \"if this number is able to receive\", \"if you wish to stay on the line\", \"okay great we are all set\", \"you should receive a text\", \"thank you for calling\", \"we are unable to communicate via text\", \"if you are using an Apple device\", \"you are able to receive iMessages\", \"to use SMS text messaging\", \"please listen carefully as our selections\", \"for emergencies roadside assistance\", \"door unlocks or stolen vehicle\", \"for service plan maintenance\", \"including purchase data plans\", \"hands free calling minutes or to renew\", \"to renew your service plan\", \"billing and cancellation inquiries\", \"for technical assistance\", \"for roadside assistance\", \"all other emergencies\", \"or mobile apps\", \"or vehicle apps\", \"to unlock your doors\", \"to report a stolen vehicle or missing person\", \"to assist in locating a stolen vehicle\", \"we require the involvement of law enforcement\", \"to return to the main menu\", \"do you have a child or pet\", \"for yes for no\"~2, \"please visit your owner center\", \"if you sold traded\", \"or no longer possess the vehicle\", \"for billing inquiries\", ((\"to cancel your service plan\", \"to update your personal\") NOT (\"I\")), \"for hands free calling phone number change\", \"for issues with activating\", \"navigation or hands free calling\", \"for call command issues\", \"for resetting your OnStar password\", \"or obtaining your account\", \"for issues with website enrollment\", \"for issues with wi fi hotspot\", \"for issues with touch screen radio\", \"for help with bluetooth pairing\", \"hello this is from\"~4, \"hi this is from\"~4, \"hey this is from\"~4, \"for your convenience you can now\", \"connect with us via text\"~1, \"I will send you an email with instructions\", \"you can call me back between the hours of\"~4, \"thanks and have a great day\", \"thank you and have a great day\", \"returning your call\", \"we have updates on your\", \"updates pertaining to your case\", \"please know that we now\", \"provide the option to communicate via\", \"we understand that your time is valuable\"~1, \"to initiate text conversation\"~2, ((\"text to 23689\"~1) NOT (\"I\", \"said\")), \"you can respond to this email or call me back\", \"by texting to 23689\"~1, \"you accept terms at\", \"receive SMS text messages\", \"those acting on our behalf\", \"automatic telephone dialing system\", \"mobile telephone number requesting\", \"this is not required as a condition\", \"to conduct business with us\", \"when you opt in\", \"you are also confirming that you are\", \"you are the primary account holder\", \"to opt out of receiving text\", \"reply stop to 23689\", \"send help to 23689\", \"message frequency varies\", \"automated responses may be provided\", \"message and data rates may apply\", \"visit for our privacy statement\"~2, \"you have unsubscribed and will not receive\", \"reply stop to end messages\", \"reply stop to cancel\", \"subject to terms at\", \"help for more info\", \"thanks for contacting GM\", \"thank you for contacting GM\", \"to help verify your account\", \"can you please provide your first name\", \"can we also get your last name\", \"do you have your case number\", \"please provide it now or type skip\", \"you will be connected with an advisor\"~1, \"we have received your message\", \"it is outside of business hours\", \"its outside of business hours\", \"one of our advisors will respond\", \"when we open at\", \"at the tone please record\", \"if you are satisfied with the message\")), \"I would prefer to chat with a customer service advisor\", \"your call has been forwarded\", ((call_direction:outgoing) AND (_id_source:audio) AND (\"leave a message\", \"you can hang up\" \"at the tone\", ((\"XXX-XXX-XXXX\") AND (\"is not available\"))))"
+    }
+  },
+  "nodes": [
+    {
+      "id": "contact_center",
+      "name": "Contact Center",
+      "path": [],
+      "level": 2,
+      "description": "",
+      "comparison_target": false,
+      "has_rules": false,
+      "lanes": {
+        "keywords": "",
+        "and": "",
+        "and2": "",
+        "not": ""
+      },
+      "is_leaf": false
+    },
+    {
+      "id": "cc_advisor_dissatisfied_with_advisor",
+      "name": "CC - Advisor - Dissatisfied With Advisor",
+      "path": [
+        "Contact Center"
+      ],
+      "level": 3,
+      "description": "Roll up for all of the Dissatisfied with Advisor topics. This includes Not Efficient, Not Helpful, Not Knowledgeable, Pushy Sales, Rude, Unspecified Dissatisfaction, Confusing/Makes No Sense, Inaccurate Information, Misled/Lied to/Deceptive, Call Clarity – Hard to Hear, Call Clarity – Say That Again, and Call Clarity – Language Barrier. This node does not have any rules.",
+      "comparison_target": false,
+      "has_rules": false,
+      "lanes": {
+        "keywords": "",
+        "and": "",
+        "and2": "",
+        "not": ""
+      },
+      "is_leaf": false
+    },
+    {
+      "id": "cc_advisor_confusing_makes_no_sense",
+      "name": "CC Advisor - Confusing/Makes No Sense",
+      "path": [
+        "Contact Center",
+        "CC - Advisor - Dissatisfied With Advisor"
+      ],
+      "level": 4,
+      "description": "Customer mentions of being confused or feeling like something does not make sense EXCLUDE mentions of the dealer and Roadside",
+      "comparison_target": true,
+      "has_rules": true,
+      "lanes": {
+        "keywords": "(confusion NOT (\"I apologize for confusion\"~3, \"sorry for confusion\"~2, \"sorry about confusion\"~2, \"no confusion\")), confused, confuses, confuse, ((confusing, confuseing) NOT (\"not confusing\"~1)), bewilder*, unclear, \"not enough info\", \"not enough information\", \"too much info\", \"too much information\", \"any sense\" \"make no sense\" \"makes no sense\" nonsense \"understand why\" \"explain why\" \"that cannot be right\"~1 \"that can not be right\"~1 \"no way that can be right\"",
+        "and": "",
+        "and2": "NOT(_verbatimtype:agentverbatim)",
+        "not": "\"sense of\", \"political nonsense\", ((\"I understand why\", \"we understand why\") NOT (\"not sure I understand\"~1, \"I do not understand\"~1, \"play me\")), \"no nonsense\", (\"does that make any sense\" NOT \"how does that\") ((\"not want to confuse\") NOT (\"was confusing\" \"is confusing\" \"am confused\")) ((\"you understand\"~2) NOT (confus*)), \"if that makes any sense\", \"if that makes sense\""
+      },
+      "is_leaf": true
+    },
+    {
+      "id": "cc_advisor_inaccurate_information",
+      "name": "CC Advisor - Inaccurate Information",
+      "path": [
+        "Contact Center",
+        "CC - Advisor - Dissatisfied With Advisor"
+      ],
+      "level": 4,
+      "description": "Customer mentions of being given inaccurate information or directions or the advisor putting in wrong information EXCLUDE mentions of the dealer and Roadside",
+      "comparison_target": true,
+      "has_rules": true,
+      "lanes": {
+        "keywords": "(incorrect NOT (\"saying incorrect information\", \"said incorrect information\", \"would be incorrect\", \"display incorrect\"~1, \"displaying incorrect\"~1, \"displays incorrect\"~1, \"displayed incorrect\"~1, \"show incorrect\"~1, \"showing incorrect\"~1, \"shows incorrect\"~1, \"showed incorrect\"~1, \"note of the incorrect answer\", \"I had the incorrect\"~1, \"I have the incorrect\"~1, \"not incorrect\", app, sensor, website, gps)), \"was told incorrectly\"~2, \"told me incorrectly\"~2, \"explained incorrectly\"~2, \"not true\"~1, ((false, inaccur*, \"not correct\"~1, \"not accurate\"~1) NOT (\"anything is inaccurate\", \"not inaccurate\", \"directions to false\", app, sensor, website, gps, \"false alarm\", \"true false\"~2, reading)), ((\"not right\", \"not the right\", \"not seem right\", \"not sound right\") NOT (\"right now\", \"right away\", \"not right this second\", \"not right this minute\", \"told me that is not right\"~2)), (wrong NOT (\"what is wrong\", \"what was wrong\", \"I was wrong\", \"do not get me wrong\", \"right or wrong\", \"wrong or what\", \"wrong with\", \"done wrong\", \"wrong in system\"~2, \"anything wrong\", \"wrong button\", \"click the wrong\", \"clicked the wrong\", \"clicking the wrong\", \"nothing wrong\"~1, \"something wrong\"~1, \"everything is wrong\"~1, \"everything was wrong\"~1, \"doing wrong\", \"goes wrong\", \"went wrong\", \"whatever was wrong\"~1, \"whatever is wrong\"~1, \"thing that was wrong\"~1, \"I am wrong\"~1, \"I did the wrong\", \"I done wrong\"~1, \"I did wrong\", \"I hit the wrong\", ((\"I had the wrong\"~1, \"I have the wrong\"~1) NOT (\"I received\"~1, \"I gotten\"~1)), \"be in the wrong place\", \"called the wrong number\"~1, \"calling the wrong number\"~1, \"wrong person\", \"wrong name\", \"wrong vehicle\", \"wrong car\", \"wrong truck\", \"wrong paper\", \"wrong paperwork\", \"wrong screws\"~1, \"credit card\", \"card information\", \"display wrong\"~1, \"displaying wrong\"~1, \"displays wrong\"~1, \"displayed wrong\"~1, \"show wrong\"~1, \"showing wrong\"~1, \"shows wrong\"~1, \"showed wrong\"~1, \"parked in the wrong\", \"wroxng day\", \"only thing wrong\"~3)), ((\"bad info\", \"bad information\") NOT (\"good or bad\", app, website, sensor)), \"wrong directions\", \"I am getting wrong\", \"I am given wrong\", \"I am told wrong\",",
+        "and": "(information NOT (\"I entered wrong information\"~4, \"I gave wrong information\"~3, (\"I give you wrong\"~3 AND \"give you\"), \"I gave him wrong information\"~3, \"I gave her wrong information\"~3, \"I gave them wrong information\"~3, \"I accidentally gave\", \"my information\"~1, \"payment information\", \"billing information\", \"card information\", \"account information\", \"contact information\", \"vehicle information\", \"warranty information\", \"vin information\", \"information on my vehicle\", \"sometimes that information\", \"had wrong information\"~1, \"had incorrect information\"~1, \"have wrong information\"~1, \"have incorrect information\"~1, \"had inaccurate information\"~1, \"have inaccurate information\"~1, \"not have correct information\"~1, \"on file\", \"on the account\", \"in the app\", \"in the apps\", \"on my account\", \"on the app\", \"in the system\", \"the system has\", \"the system shows\", website, \"it keeps\"~1, \"it is giving me\"~1, \"it is telling me\"~1, \"it kept\"~1, \"it was giving me\"~1, \"it gave me\", \"it is gave me\", \"it also gave me\", \"it just gave me\", \"it still gave me\", \"it only gave me\", \"it was telling me\"~1, \"it told me\"~1)), info, (statement* AND (true, false)), ((\"told me\", \"was told\") NOT (\"it told me\", friend, dealer, mechanic)), \"was told by operator\"~3, (\"gave me\" NOT (\"I gave me\", \"it gave me\", \"it is gave me\", \"it also gave me\", \"it just gave me\", \"it still gave me\", \"it only gave me\", mechanic*)), ((\"you provided me wrong\"~2, \"he provided me wrong\"~2, \"she provided me wrong\"~2) NOT (\"I provided me\", \"it provided me\", technician*, mechanic*, )), ((directions, route) NOT (\"it keeps\"~1, \"it is giving me\"~1, \"it is telling me\"~1, \"it kept\"~1, \"it was giving me\"~1, \"it gave me\", \"it is gave me\", \"it also gave me\", \"it just gave me\", \"it still gave me\", \"it only gave me\", \"it was telling me\"~1, \"it told me\"~1)), \"given incorrect information\"~1, \"given wrong information\"~1,",
+        "and2": "NOT(_verbatimtype:agentverbatim)",
+        "not": "\"not want give inaccurate\"~5, \"not want provide inaccurate\"~5, \"not want give incorrect\"~5, \"not want provide incorrect\"~5, \"not want give wrong\"~5, \"not want provide wrong\"~5, \"not want give false\"~5, \"not want provide false\"~5, \"not give inaccurate\"~5, \"not provide inaccurate\"~5, \"not give incorrect\"~5, \"make sure I am not giving\"~3, \"not provide incorrect\"~5, \"not give wrong\"~5, \"not provide wrong\"~5, \"not give false\"~5, \"not provide false\"~5, \"not want give bad\"~5, ((\"great information\", \"good information\") NOT (\"wrong information\", \"incorrect information\")), \"the dealer\", \"the dealership\", (dealer* NOT (he, she, advisor)), salesp*, \"sales person\", \"sales people\", \"sales guy\", \"sales dept\", \"sales department\", finance, financing, salesman, technician*, \"insurance company gave me\"~4, \"insurance company is giving\"~1, \"wrong way driver\", password, \"incorrect programming\", \"not accurate information provided\", \"I put wrong\"~1, \"I entered wrong\"~1, (\"I provided wrong\"~1 NOT \"I was provided\"), (\"I gave wrong\"~2 NOT \"I gave me\"), \"I am giving you wrong\"~3, \"rubbed me wrong\"~2, \"I put in wrong\"~3, \"I not want put in wrong\"~4, \"I not want give wrong\"~4, \"me wrong color\"~2, \"login wrong\"~3, \"login incorrect\"~3, ((\"wrong email\"~3, \"incorrect email\"~3, \"wrong account\"~3, \"incorrect account\"~3, \"wrong username\"~3, \"incorrect username\"~3, \"pin wrong\"~3, \"pin incorrect\"~3, ) NOT (\"gave me\", \"told me\", \"was told\")), \"told me I have wrong\"~3, \"he told me that was the wrong\"~1, \"she told me that was the wrong\"~1, ((\"I sent the wrong\"~1, \"I sent it to the wrong\"~1, \"I sent incorrect\"~1) NOT (\"was sent\"~1, \"have been sent\"~1, \"I got sent\"~1, \"sent me\", \"am sent\")), \"said that is the wrong number\", \"could be wrong\", \"might be wrong\", \"may be wrong\", \"could be incorrect\", \"might be incorrect\", \"may be incorrect\", \"incorrect mounting\", \"not reading correct\"~1, \"not showing correct\"~1, \"may not be correct\", \"may not be accurate\", \"not displaying correct\"~1, \"tire pressure\", \"fuel gauge\", \"fuel level\", \"charge status\", mileage, \"things going wrong\", (diagnostic* NOT (\"gave me\", \"told me\")) \"wrong directions\", \"credit report\""
+      },
+      "is_leaf": true
+    },
+    {
+      "id": "loyalty",
+      "name": "Loyalty",
+      "path": [],
+      "level": 2,
+      "description": "Any mentions related to GM rewards & loyalty programs\r\n\r\nINCLUDES: account, points, rewards website, marcus card/site, capital one",
+      "comparison_target": false,
+      "has_rules": true,
+      "lanes": {
+        "keywords": "\"gmr account\", reward, rewards, voucher*, \"loyalty program\", \"loyalty bonus\", \"mygmrewards.com\", \"mygmrewards\", gmr, \"marcus.com\" \"marcus .com\", \"experience.gm.com\", ((\"GM card\"~2, \"GM cards\"~2, \"BuyPower card\"~2, \"Chevy Card\", \"Chevrolet Card\", \"Buick Card\", \"GMC Card\", \"Cadillac Card\") NOT (\"gift card\", \"gift cards\")), \"Redeeming\", \"Redemption\", \"redeem\", \"next tier\", \"tier plan\", \"tier plans\", \"tier program\", \"tiers program\", \"tiers mean\", \"tier status\", \"different tiers\", \"tier member\", \"Silver tier\"~4, \"tier silver\"~4, \"Silver member\", \"Gold tier\"~4, \"tier gold\"~4, \"Gold member\", \"Platinum tier\"~4, \"tier platinum\"~4, \"Platinum member\", \"Appreciation program\", \"Earnings\", “marcus goldman”, \"marcus.com\", www.marcus.com, ((marcus) AND (gold*)), ((*goodwill*, \"good-will\") NOT (\"goodwill store\"~2, direction*, retail, donat*, locations, \"find goodwill\"~1, \"looking for goodwill\"~1)), \"vehicle purchase program\", ((private) AND (offer, offers, offering*, incentive*)), ((\"marcus\") AND (website, card, goldman, sachs, transfer*, access, \"changed over\", \"changed to\", \"turning over\", \"change to\", \"switch over\", \"switched over\", \"switching over\", \"capital one\", redirect*)), ((cc_lob_mv:*reward*) AND (points, account, loyal, loyalty)), ((points) AND (mybuick, mychevy, mychevrolet, mygmc, mycadillac, \"gm points\", \"chevy points\", \"chevrolet points\", \"cadillac points\", \"buick points\", \"my gmc\", \"my chevy\", \"my chevrolet\", \"my buick\", \"my cadillac\", earn, ))",
+        "and": "",
+        "and2": "",
+        "not": "\"Points Ave\", \"shift points\", \"test points\", \"reward him\", \"reward her\", \"reward them\", \"cross points\", \"key points\", \"exclamation points\", \"points ct\", \"reward ct\", ((marcus*, \"Marcus Goldman\") AND (\"specialist\", \"this is\", \"name is\", \"transferring you\", \"transfer you\", \"transferred you\")) voucher*"
+      },
+      "is_leaf": false
+    },
+    {
+      "id": "loyalty_rewards",
+      "name": "Loyalty - Rewards",
+      "path": [
+        "Loyalty"
+      ],
+      "level": 3,
+      "description": "DEFINITION: Mentions related to using and managing GM Rewards\r\n\r\nINCLUDE: account, points\r\n\r\nEXCLUDE: card, goodwill, private offer, VPP",
+      "comparison_target": false,
+      "has_rules": true,
+      "lanes": {
+        "keywords": "\"REWARDS@GM.COM\", \"Rewards ID\", \"*reward*\", \"My Rewards\", \"Bonus points\", (\"reward\" AND \"points\"), \"Reward points\", \"Redeeming\", \"Redemption\", \"redeem\", \"My Chevy rewards\", \"Chevy rewards\", \"Chevrolet rewards\", \"My GMC rewards\", \"GMC rewards\", \"My Cadillac rewards\", \"Cadillac rewards\", \"My Buick rewards\", \"Buick rewards\", \"Gm rewards\", \"Loyalty program\", \"Loyalty bonus\"",
+        "and": "",
+        "and2": "",
+        "not": ""
+      },
+      "is_leaf": false
+    },
+    {
+      "id": "loyalty_rewards_points",
+      "name": "Loyalty Rewards - Points",
+      "path": [
+        "Loyalty",
+        "Loyalty - Rewards"
+      ],
+      "level": 4,
+      "description": "DEFINITION: Mentions related to GM My Rewards points\r\nINCLUDES: explicit reference of points",
+      "comparison_target": true,
+      "has_rules": true,
+      "lanes": {
+        "keywords": "points, \"point voucher\", \"rewards point\", \"reward point\" \"voucher*\"",
+        "and": "",
+        "and2": "",
+        "not": "\"common points\", \"points street\", \"point of view\", \"points of view\", \"point out\", \"point of contact\", \"points of contact\", \"noise points\", \"south points\"~2, \"north points\"~2, \"west points\"~2, \"east points\"~2, \"points tool\"~4"
+      },
+      "is_leaf": false
+    },
+    {
+      "id": "points_redeem",
+      "name": "Points - Redeem",
+      "path": [
+        "Loyalty",
+        "Loyalty - Rewards",
+        "Loyalty Rewards - Points"
+      ],
+      "level": 5,
+      "description": "DEFINITION: See above with additional reference of spending / redeeming points e.g. for service allowance \r\nRESOURCES: https://www.mygmrewards.com/redeem",
+      "comparison_target": true,
+      "has_rules": true,
+      "lanes": {
+        "keywords": "redeem* use using used",
+        "and": "point* reward*",
+        "and2": "",
+        "not": "\"redemption notice available\", \"congratulations on redeeming\", \"she is calling\", \"he is calling\", \"car specialist\", \"he is trying\", \"she is trying\", \"he was trying\", \"she was trying\", \"she is interested\", \"he is interested\", \"need your authorization\", \"redeem his points\", \"redeem her points\", \"redeeming his points\", \"redeeming her points\", \"customer is calling\", \"customer is trying\", \"customer was trying\", \"you can start earning points\", \"customer's points\"~1, \"you can earn and redeem\", \"have a customer\", \"he wants to redeem\", \"she wants to redeem\", \"you should be able to redeem\", \"what she can redeem\", \"what he can redeem\""
+      },
+      "is_leaf": true
+    }
+  ]
+}

@@ -1,8 +1,10 @@
-# GM VOC POC — Three Classification Approaches
+# GM VOC POC — Lightweight AI-Powered Solution (and approach comparison)
 
 The POC evaluates whether Databricks can replicate *and* improve on GM's
 Qualtrics XM Discover topic tagging. There is no single "right" method, so we
-built three, from most-deterministic to most-ML, and a job that compares them.
+built three approaches, from most-deterministic to most-AI, and a job that
+compares them. Track 2 — the **lightweight AI-powered solution** built on
+Databricks AI functions — is the focus of this document.
 
 | # | Approach | Files | What it is | Strengths | Trade-offs |
 |---|----------|-------|-----------|-----------|-----------|
@@ -13,14 +15,25 @@ built three, from most-deterministic to most-ML, and a job that compares them.
 
 ## Why all three (and the maintenance point)
 
+This is a **lightweight AI-powered solution**, not a custom-trained ML model.
 Databricks' built-in AI functions (`ai_classify`, `ai_analyze_sentiment`,
-`ai_query`, `ai_gen`) are a **lighter-weight alternative to a custom ML model**:
-there is no model to train, host, or retrain — GM would not own long-term model
-maintenance. That directly addresses the concern that a bespoke ML approach
-leaves the team responsible for upkeep. Approach 2 is therefore the recommended
-"true ML" path for the POC; Approach 1 remains the deterministic control the
-POC must regress against; Approach 3 is the discovery capability rules can't
-provide.
+`ai_query`, `ai_gen`) call **hosted** models — there is nothing to train, host,
+or retrain, so GM would not own long-term model maintenance. That directly
+addresses the concern that a bespoke ML approach leaves the team responsible for
+upkeep.
+
+To be precise about what is and isn't ML here:
+- **Classification (Approach 2)** is *not* a trained classifier — it is a hosted
+  LLM (`ai_classify`). No weights are learned on GM data.
+- **Topic discovery (Approach 3)** *does* train a real model: Spark MLlib KMeans
+  is fit on sentence embeddings. That is genuine unsupervised learning.
+- A custom **supervised** classifier (e.g. embeddings + MLlib logistic
+  regression tracked in MLflow) is deliberately **out of scope** for this
+  lightweight solution; it can be added later as a separate track if the POC
+  wants a hostable, zero-token-cost model.
+
+Approach 1 remains the deterministic control the POC regresses against;
+Approach 3 is the discovery capability rules can't provide.
 
 ## How the AI track works
 

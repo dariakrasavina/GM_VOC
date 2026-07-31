@@ -6,7 +6,7 @@
 import os
 import sys
 
-# The bundle uploads topic_model/ next to this notebook; make it importable.
+# The bundle uploads the track folder next to this notebook; make it importable.
 _here = os.path.dirname(os.path.abspath("__file__")) if "__file__" not in dir() else os.path.dirname(__file__)
 for cand in (_here, os.getcwd(), "/Workspace" + os.getcwd()):
     if cand and cand not in sys.path:

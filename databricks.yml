@@ -28,7 +28,7 @@ resources:
         - task_key: tag_verbatims
           # Serverless: no cluster to configure. Uses the workspace default.
           notebook_task:
-            notebook_path: ./topic_model/run_job_notebook.py
+            notebook_path: ./rule_engine/run_job_notebook.py
             base_parameters:
               sentence_table: daria_krasavina.gm_voc.qualtrics_audio_transcripts_sentence_level_sample_data
               metadata_table: daria_krasavina.gm_voc.qualtrics_audio_transcripts_metadata_sample_data
@@ -40,15 +40,16 @@ resources:
         enabled: true
 
     # ----------------------------------------------------------------------
-    # Track 2 — ML/NLP pipeline: AI classify -> topic discovery -> compare.
+    # Track 2 — lightweight AI-powered solution (Databricks AI functions):
+    # AI classify -> topic discovery -> compare.
     # AI functions require serverless compute + DBR 18.2+.
     # ----------------------------------------------------------------------
     voc_ai_pipeline_job:
-      name: "[${bundle.target}] GM VOC AI Pipeline (ai_classify + discovery)"
+      name: "[${bundle.target}] GM VOC Lightweight AI Solution (ai_classify + discovery)"
       tasks:
         - task_key: ai_classify
           notebook_task:
-            notebook_path: ./topic_model/run_ai_classify_notebook.py
+            notebook_path: ./ai_solution/run_ai_classify_notebook.py
             base_parameters:
               sentence_table: daria_krasavina.gm_voc.qualtrics_audio_transcripts_sentence_level_sample_data
               metadata_table: daria_krasavina.gm_voc.qualtrics_audio_transcripts_metadata_sample_data
@@ -60,7 +61,7 @@ resources:
 
         - task_key: topic_discovery
           notebook_task:
-            notebook_path: ./topic_model/run_topic_discovery_notebook.py
+            notebook_path: ./ai_solution/run_topic_discovery_notebook.py
             base_parameters:
               sentence_table: daria_krasavina.gm_voc.qualtrics_audio_transcripts_sentence_level_sample_data
               themes_table: daria_krasavina.gm_voc.voc_discovered_themes
@@ -78,7 +79,7 @@ resources:
           depends_on:
             - task_key: ai_classify
           notebook_task:
-            notebook_path: ./topic_model/run_compare_notebook.py
+            notebook_path: ./ai_solution/run_compare_notebook.py
             base_parameters:
               rule_tags_table: daria_krasavina.gm_voc.voc_topic_tags
               ai_tags_table: daria_krasavina.gm_voc.voc_ai_topic_tags

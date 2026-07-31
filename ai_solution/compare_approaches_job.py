@@ -34,6 +34,19 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 
+def find_rules_json():
+    """Locate shared/rules.json regardless of folder layout (see tagger.py)."""
+    repo = os.path.dirname(HERE)
+    for c in (os.path.join(HERE, "rules.json"),
+              os.path.join(repo, "shared", "rules.json"),
+              os.path.join(HERE, "shared", "rules.json"),
+              os.path.join(os.getcwd(), "rules.json"),
+              os.path.join(os.getcwd(), "shared", "rules.json")):
+        if os.path.exists(c):
+            return c
+    raise FileNotFoundError("rules.json not found near %s" % HERE)
+
+
 def get_params():
     params = dict(DEFAULTS)
     try:
@@ -60,7 +73,7 @@ def get_params():
 
 def target_topics():
     """(rule_column_id, ai_label_name) for each POC comparison topic."""
-    with open(os.path.join(HERE, "rules.json")) as f:
+    with open(find_rules_json()) as f:
         rules = json.load(f)
     out = []
     for n in rules["nodes"]:

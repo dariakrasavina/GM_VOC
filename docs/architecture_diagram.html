@@ -18,8 +18,8 @@
 <body>
   <h1>GM Voice of Customer POC — Architecture &amp; Execution Flow</h1>
   <p class="note">Databricks topic-model replication of Qualtrics XM Discover,
-     with two classification tracks — a deterministic <b>rule engine</b> and an
-     <b>ML / NLP</b> track built on Databricks AI functions (<code>ai_classify</code>,
+     with two classification tracks — a deterministic <b>rule engine</b> and a
+     <b>lightweight AI-powered solution</b> built on Databricks AI functions (<code>ai_classify</code>,
      <code>ai_analyze_sentiment</code>, <code>ai_query</code> embeddings + KMeans,
      <code>ai_gen</code>). Diagrams below: (1) component map &amp; build-time flow,
      (2) rule-track runtime order, (3) ML-track runtime order.</p>
@@ -56,7 +56,7 @@ flowchart TB
         YML["databricks.yml<br/>(Asset Bundle)"]
     end
 
-    subgraph ML["Databricks — Track 2: ML / NLP (AI functions)"]
+    subgraph ML["Databricks — Track 2: Lightweight AI-powered solution (AI functions)"]
         AICLS["ai_classify_job.py<br/>ai_classify + ai_analyze_sentiment"]
         DISC["topic_discovery_job.py<br/>ai_query embeddings + KMeans + ai_gen"]
         CMP["compare_approaches_job.py<br/>rules vs AI agreement"]
@@ -112,7 +112,7 @@ sequenceDiagram
   </pre>
   </div>
 
-  <h2>3. Runtime execution order — ML / NLP track (voc_ai_pipeline_job)</h2>
+  <h2>3. Runtime execution order — lightweight AI-powered solution (voc_ai_pipeline_job)</h2>
   <div class="diagram">
   <pre class="mermaid">
 sequenceDiagram
@@ -163,7 +163,7 @@ sequenceDiagram
   <b>Track 1 (rules):</b> the same engine runs inside the Spark
   <code>pandas_udf</code>, so local and production results are identical —
   deterministic, explainable, the XM Discover control replica.<br/>
-  <b>Track 2 (ML/NLP):</b> Databricks AI functions classify by meaning
+  <b>Track 2 (lightweight AI-powered solution):</b> Databricks AI functions classify by meaning
   (<code>ai_classify</code>), add sentiment (<code>ai_analyze_sentiment</code>),
   and discover emergent themes (embeddings + KMeans + <code>ai_gen</code>) — no
   model to train or maintain. The compare job regresses AI against the rule

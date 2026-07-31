@@ -112,8 +112,8 @@ def build_body():
         "A system that classifies GM contact-center call transcripts by topic on "
         "Databricks, using two complementary tracks: (1) a deterministic rule "
         "engine that faithfully replicates GM's Qualtrics XM Discover logic, and "
-        "(2) an ML / NLP track built on Databricks' native AI functions "
-        "(ai_classify, ai_analyze_sentiment, ai_query embeddings, ai_gen). "
+        "(2) a lightweight AI-powered solution built on Databricks' native AI "
+        "functions (ai_classify, ai_analyze_sentiment, ai_query embeddings, ai_gen). "
         "Both operate at sentence grain so results can be validated against the "
         "current Qualtrics control set."))
     b.append(para(
@@ -121,10 +121,11 @@ def build_body():
         "dependencies, so the exact same code runs inside a Spark job at scale "
         "on Databricks and can be unit-tested locally without a cluster."))
     b.append(para(
-        "Track 2 rationale: Databricks AI functions provide a lighter-weight "
-        "alternative to a custom ML model — nothing to train, host, or retrain — "
-        "so GM does not own long-term model maintenance. The rule engine remains "
-        "the deterministic control the ML track is regressed against."))
+        "Track 2 rationale: this is a lightweight AI-powered solution — "
+        "Databricks AI functions provide an alternative to a custom ML model with "
+        "nothing to train, host, or retrain, so GM does not own long-term model "
+        "maintenance. The rule engine remains the deterministic control the AI "
+        "solution is regressed against."))
 
     b.append(para("2. The four topics it tags", style="Heading1"))
     b.append(para("From two branches of GM's APM hierarchy:"))
@@ -199,7 +200,7 @@ def build_body():
          "no cluster needed — used to validate everything locally."),
     ]))
 
-    b.append(para("6. Files — ML / NLP track (Track 2)", style="Heading1"))
+    b.append(para("6. Files — lightweight AI-powered solution (Track 2)", style="Heading1"))
     b.append(table([
         ("File", "Purpose"),
         ("ai_classify_job.py",
@@ -217,8 +218,8 @@ def build_body():
          "Writes voc_approach_comparison."),
         ("run_ai_classify_notebook.py / run_topic_discovery_notebook.py / "
          "run_compare_notebook.py",
-         "Thin Databricks notebook entrypoints for the three ML jobs."),
-        ("ML_APPROACH.md",
+         "Thin Databricks notebook entrypoints for the three AI-solution jobs."),
+        ("LIGHTWEIGHT_AI_SOLUTION.md",
          "Documents the three approaches, requirements (serverless + DBR 18.2+), "
          "cost notes, output tables, and caveats to verify on first real run."),
     ]))
@@ -245,7 +246,7 @@ def build_body():
          "rules; voc_ai_pipeline_job for AI classify + discovery + compare) as "
          "serverless tasks. Deployed to the daria_k_sandbox workspace."),
         ("README.md", "How everything fits together and how to run it."),
-        ("ML_APPROACH.md", "The three-approach ML strategy and AI-track details."),
+        ("LIGHTWEIGHT_AI_SOLUTION.md", "The lightweight AI-powered solution and three-approach comparison."),
         ("VALIDATION_SUMMARY.md",
          "POC deliverable: what was built, what the data showed, and "
          "strengths / gaps / recommendations."),
@@ -278,7 +279,7 @@ def build_body():
 
     b.append(para("10. Status", style="Heading1"))
     b.append(bullet("Track 1 (rules): built, tested (33/33), validated end-to-end locally."))
-    b.append(bullet("Track 2 (ML/NLP): ai_classify, topic-discovery, and comparison jobs built and compile; wired into the bundle."))
+    b.append(bullet("Track 2 (lightweight AI-powered solution): ai_classify, topic-discovery, and comparison jobs built and compile; wired into the bundle."))
     b.append(bullet("Both jobs deployed to Databricks (daria_k_sandbox) as an Asset Bundle."))
     b.append(bullet("Client requirement docs scrubbed from git history; repo made private."))
     b.append(bullet("Pending: run the ML pipeline against real input tables (needs the daria_krasavina.gm_voc tables loaded)."))

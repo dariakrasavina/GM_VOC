@@ -1,9 +1,9 @@
 """
 ai_classify_job.py
 ------------------
-ML / NLP topic classification for the GM VOC POC using Databricks built-in AI
-functions — the "AI-assisted classification" track that complements the
-deterministic rule engine (voc_topic_model_job.py).
+Lightweight AI-powered topic classification for the GM VOC POC using Databricks
+built-in AI functions — the "AI-assisted classification" track that complements
+the deterministic rule engine (voc_topic_model_job.py).
 
 This is a genuinely different approach: instead of hand-maintained keyword rules,
 it uses a large language model (via `ai_classify`) to decide which topic a
@@ -56,6 +56,20 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
+
+def find_rules_json():
+    """Locate shared/rules.json regardless of folder layout (see tagger.py)."""
+    repo = os.path.dirname(HERE)
+    for c in (os.path.join(HERE, "rules.json"),
+              os.path.join(repo, "shared", "rules.json"),
+              os.path.join(HERE, "shared", "rules.json"),
+              os.path.join(os.getcwd(), "rules.json"),
+              os.path.join(os.getcwd(), "shared", "rules.json")):
+        if os.path.exists(c):
+            return c
+    raise FileNotFoundError("rules.json not found near %s" % HERE)
+
+
 # "None" catch-all so the classifier can decline all four topics (most
 # customer sentences match no POC topic).
 NONE_LABEL = "None of these"
@@ -90,7 +104,7 @@ def build_label_map(rules_path=None):
     engine uses, so both approaches classify against identical topic definitions.
     """
     if rules_path is None:
-        rules_path = os.path.join(HERE, "rules.json")
+        rules_path = find_rules_json()
     with open(rules_path) as f:
         rules = json.load(f)
     labels = {}

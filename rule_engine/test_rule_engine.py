@@ -1,6 +1,6 @@
 """
 Unit tests for the XM Discover query engine, checking each documented
-syntax behavior. Run: python3 topic_model/test_rule_engine.py
+syntax behavior. Run: python3 rule_engine/test_rule_engine.py
 """
 import os
 import sys

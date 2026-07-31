@@ -1,9 +1,9 @@
 # GM VOC POC — Architecture (Mermaid)
 
 Databricks topic-model replication of Qualtrics XM Discover, with two
-classification tracks: a deterministic **rule engine** and an **ML / NLP** track
-built on Databricks AI functions (`ai_classify`, `ai_analyze_sentiment`,
-`ai_query` embeddings + KMeans, `ai_gen`).
+classification tracks: a deterministic **rule engine** and a **lightweight
+AI-powered solution** built on Databricks AI functions (`ai_classify`,
+`ai_analyze_sentiment`, `ai_query` embeddings + KMeans, `ai_gen`).
 
 These diagrams render natively on GitHub and in any Mermaid viewer
 (e.g. https://mermaid.live). An HTML version is in `architecture_diagram.html`.
@@ -42,7 +42,7 @@ flowchart TB
         YML["databricks.yml<br/>(Asset Bundle)"]
     end
 
-    subgraph ML["Databricks — Track 2: ML / NLP (AI functions)"]
+    subgraph ML["Databricks — Track 2: Lightweight AI-powered solution (AI functions)"]
         AICLS["ai_classify_job.py<br/>ai_classify + ai_analyze_sentiment"]
         DISC["topic_discovery_job.py<br/>ai_query embeddings + KMeans + ai_gen"]
         CMP["compare_approaches_job.py<br/>rules vs AI agreement"]
@@ -100,7 +100,7 @@ sequenceDiagram
 
 ---
 
-## 3. Runtime execution order — ML / NLP track (`voc_ai_pipeline_job`)
+## 3. Runtime execution order — lightweight AI-powered solution (`voc_ai_pipeline_job`)
 
 ```mermaid
 sequenceDiagram
@@ -151,7 +151,7 @@ sequenceDiagram
 - **Track 1 (rules):** the same engine runs inside the Spark `pandas_udf`, so
   local and production results are identical — deterministic, explainable, the
   XM Discover control replica.
-- **Track 2 (ML/NLP):** Databricks AI functions classify by meaning
+- **Track 2 (lightweight AI-powered solution):** Databricks AI functions classify by meaning
   (`ai_classify`), add sentiment (`ai_analyze_sentiment`), and discover emergent
   themes (embeddings + KMeans + `ai_gen`) — no model to train or maintain. The
   compare job regresses AI against the rule control. Requires serverless compute

@@ -5,28 +5,52 @@ audio transcripts, on Databricks. Built for the Phase 2 POC: prove Databricks
 can reproduce the swim-lane rule logic and produce tagged output that validates
 directly against the XM Discover control set.
 
-**Two tracks** (see `ML_APPROACH.md` for the full comparison):
+**Two tracks** (see `LIGHTWEIGHT_AI_SOLUTION.md` for the full comparison):
 1. **Rule engine** — deterministic XM Discover replica (this doc).
-2. **ML / NLP** — Databricks AI functions: `ai_classify` for LLM topic
-   classification, `ai_analyze_sentiment` for sentiment, and embeddings +
-   KMeans + `ai_gen` for unsupervised topic discovery. Files: `ai_classify_job.py`,
+2. **Lightweight AI-powered solution** — Databricks AI functions: `ai_classify`
+   for LLM topic classification, `ai_analyze_sentiment` for sentiment, and
+   embeddings + KMeans + `ai_gen` for unsupervised topic discovery. No custom
+   model to train or maintain. Files: `ai_classify_job.py`,
    `topic_discovery_job.py`, `compare_approaches_job.py`.
 
 ## Design
 
-Two clean layers so the exact same matching logic runs locally and at scale:
+The repo is organized by approach track, with shared assets and docs separate:
+
+```
+gm_voc/
+├── rule_engine/     Track 1 — deterministic XM Discover replica
+├── ai_solution/     Track 2 — lightweight AI-powered solution (AI functions)
+├── shared/          rules.json + generators used by both tracks
+├── docs/            this README, ARCHITECTURE, LIGHTWEIGHT_AI_SOLUTION, etc.
+└── test_data/       sample + demo CSVs
+```
+
+### `rule_engine/` (Track 1)
 
 | File | Role | Depends on |
 |------|------|------------|
 | `rule_engine.py` | XM Discover query language: parser + evaluator (OR/AND/NOT, phrases, wildcards `* ?`, fuzzy `~`, proximity `"…"~N`, `attr:value`). | stdlib only |
-| `tagger.py` | Applies the global scope filter + the topic nodes to one sentence. | `rule_engine` |
-| `rules.json` | The topic hierarchy + lane rules, **generated from the source workbook**. | — |
-| `build_rules_config.py` | Regenerates `rules.json` from `requirements/Qualtrics_Parent_and_Leaf_Nodes.xlsx`. | stdlib only |
+| `tagger.py` | Applies the global scope filter + the topic nodes to one sentence; resolves `shared/rules.json`. | `rule_engine` |
 | `run_local.py` | Local driver over the sample CSVs (no cluster needed). | `tagger` |
 | `voc_topic_model_job.py` | **Databricks/PySpark job** — reads Delta tables, tags via `pandas_udf`, writes Delta output + aggregates. | pyspark + `tagger` |
+| `run_job_notebook.py` | Databricks entrypoint notebook for the job. | `voc_topic_model_job` |
 | `build_dashboard.py` | Renders the HTML review dashboard from run outputs. | stdlib only |
 | `test_rule_engine.py` | 33 unit tests covering every documented syntax rule. | `rule_engine` |
+
+### `shared/`
+
+| File | Role | Depends on |
+|------|------|------------|
+| `rules.json` | The topic hierarchy + lane rules, **generated from the source workbook**. Read by both tracks. | — |
+| `build_rules_config.py` | Regenerates `rules.json` from `requirements/Qualtrics_Parent_and_Leaf_Nodes.xlsx`. | stdlib only |
 | `make_demo_fixture.py` | Schema-identical demo data (the real sample has no topical content). | stdlib only |
+
+### `ai_solution/` (Track 2)
+
+See `docs/LIGHTWEIGHT_AI_SOLUTION.md`. Files: `ai_classify_job.py`,
+`topic_discovery_job.py`, `compare_approaches_job.py`, and their
+`run_*_notebook.py` entrypoints.
 
 `rule_engine.py` and `tagger.py` **never import pyspark**, which is exactly why
 they can run inside a Spark `pandas_udf` on the cluster *and* be unit-tested on a
@@ -54,22 +78,24 @@ customer-side verbatims and strips IVR/boilerplate before any topic is applied.
 
 ## Run locally
 
+Run these from the repo root:
+
 ```bash
 # regenerate rules from the workbook (only if the workbook changed)
-python3 topic_model/build_rules_config.py
+python3 shared/build_rules_config.py
 
 # unit tests
-python3 topic_model/test_rule_engine.py
+python3 rule_engine/test_rule_engine.py
 
 # run over the provided sample CSVs
-python3 topic_model/run_local.py --out outputs/
+python3 rule_engine/run_local.py --out outputs/
 
 # demo run that actually tags (schema-identical realistic verbatims)
-python3 topic_model/make_demo_fixture.py
-python3 topic_model/run_local.py \
+python3 shared/make_demo_fixture.py
+python3 rule_engine/run_local.py \
   --sentences test_data/demo_sentence_level.csv \
   --metadata  test_data/demo_metadata.csv --out outputs_demo/
-python3 topic_model/build_dashboard.py --out outputs_demo/
+python3 rule_engine/build_dashboard.py --out outputs_demo/
 ```
 
 > **Note on the provided sample data:** `test_data/*sample_data.csv` is synthetic
@@ -79,11 +105,14 @@ python3 topic_model/build_dashboard.py --out outputs_demo/
 
 ## Run on Databricks
 
-1. Put `rule_engine.py`, `tagger.py`, `rules.json` on the executor path
-   (Repos on `sys.path`, `--py-files`, or a wheel).
-2. Set the table names / date range at the top of `voc_topic_model_job.py`
-   (or wire them to job widgets).
-3. Run as a notebook or job task. Outputs:
+The Asset Bundle (`databricks.yml`) handles this — `databricks bundle deploy`
+uploads `rule_engine/`, `ai_solution/`, and `shared/` together, and the job
+notebooks resolve `shared/rules.json` automatically.
+
+1. `databricks bundle deploy -t sandbox -p <profile>`
+2. `databricks bundle run voc_topic_model_job -t sandbox -p <profile>`
+   (table names / date range are job parameters in `databricks.yml`).
+3. Outputs:
    - `…voc_topic_tags` — one row per sentence, one 0/1 column per topic plus a
      `<topic>__terms` explanation column (the matched rule terms = "chicklets").
    - `…voc_topic_frequencies` — sentence + document counts per topic.

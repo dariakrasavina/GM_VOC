@@ -117,7 +117,7 @@ def make_tag_udf():
     def _tagger():
         if "t" not in _state:
             from tagger import build_tagger, load_rules
-            _state["t"] = build_tagger(load_rules(os.path.join(HERE, "rules.json")))
+            _state["t"] = build_tagger(load_rules())
         return _state["t"]
 
     attr_cols = SENT_ATTRS + META_ATTRS
@@ -156,7 +156,7 @@ def run():
     tags_table = params["tags_table"]
     freq_table = params["freq_table"]
 
-    tagger = build_tagger(load_rules(os.path.join(HERE, "rules.json")))
+    tagger = build_tagger(load_rules())
     topic_ids = tagger.topic_ids()
     topic_meta = tagger.topic_meta()
 

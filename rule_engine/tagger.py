@@ -30,9 +30,32 @@ ATTR_FIELDS = [
 ]
 
 
+def find_rules_json():
+    """Locate shared/rules.json regardless of folder layout.
+
+    Files live in a track folder (rule_engine/ or ai_solution/) while rules.json
+    lives in shared/. On Databricks the bundle co-locates modules + rules.json.
+    Search order covers both the local repo layout and a flat cluster upload.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    repo = os.path.dirname(here)
+    candidates = [
+        os.path.join(here, "rules.json"),               # flat / co-located (cluster)
+        os.path.join(repo, "shared", "rules.json"),     # repo layout, sibling folder
+        os.path.join(here, "shared", "rules.json"),     # shared under cwd
+        os.path.join(os.getcwd(), "rules.json"),
+        os.path.join(os.getcwd(), "shared", "rules.json"),
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    raise FileNotFoundError(
+        "rules.json not found; looked in: %s" % ", ".join(candidates))
+
+
 def load_rules(path=None):
     if path is None:
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rules.json")
+        path = find_rules_json()
     with open(path) as f:
         return json.load(f)
 

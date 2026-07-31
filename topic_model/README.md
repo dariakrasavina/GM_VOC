@@ -5,6 +5,13 @@ audio transcripts, on Databricks. Built for the Phase 2 POC: prove Databricks
 can reproduce the swim-lane rule logic and produce tagged output that validates
 directly against the XM Discover control set.
 
+**Two tracks** (see `ML_APPROACH.md` for the full comparison):
+1. **Rule engine** — deterministic XM Discover replica (this doc).
+2. **ML / NLP** — Databricks AI functions: `ai_classify` for LLM topic
+   classification, `ai_analyze_sentiment` for sentiment, and embeddings +
+   KMeans + `ai_gen` for unsupervised topic discovery. Files: `ai_classify_job.py`,
+   `topic_discovery_job.py`, `compare_approaches_job.py`.
+
 ## Design
 
 Two clean layers so the exact same matching logic runs locally and at scale:

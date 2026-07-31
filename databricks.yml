@@ -18,8 +18,12 @@ targets:
 
 resources:
   jobs:
+
+    # ----------------------------------------------------------------------
+    # Track 1 — deterministic rule engine (XM Discover replica).
+    # ----------------------------------------------------------------------
     voc_topic_model_job:
-      name: "[${bundle.target}] GM VOC Topic Model"
+      name: "[${bundle.target}] GM VOC Topic Model (rules)"
       tasks:
         - task_key: tag_verbatims
           # Serverless: no cluster to configure. Uses the workspace default.
@@ -32,5 +36,52 @@ resources:
               freq_table: daria_krasavina.gm_voc.voc_topic_frequencies
               date_start: "2025-07-01"
               date_end: "2026-06-30"
+      queue:
+        enabled: true
+
+    # ----------------------------------------------------------------------
+    # Track 2 — ML/NLP pipeline: AI classify -> topic discovery -> compare.
+    # AI functions require serverless compute + DBR 18.2+.
+    # ----------------------------------------------------------------------
+    voc_ai_pipeline_job:
+      name: "[${bundle.target}] GM VOC AI Pipeline (ai_classify + discovery)"
+      tasks:
+        - task_key: ai_classify
+          notebook_task:
+            notebook_path: ./topic_model/run_ai_classify_notebook.py
+            base_parameters:
+              sentence_table: daria_krasavina.gm_voc.qualtrics_audio_transcripts_sentence_level_sample_data
+              metadata_table: daria_krasavina.gm_voc.qualtrics_audio_transcripts_metadata_sample_data
+              ai_tags_table: daria_krasavina.gm_voc.voc_ai_topic_tags
+              date_start: "2025-07-01"
+              date_end: "2026-06-30"
+              ai_version: "2.1"
+              sample_limit: "5000"
+
+        - task_key: topic_discovery
+          notebook_task:
+            notebook_path: ./topic_model/run_topic_discovery_notebook.py
+            base_parameters:
+              sentence_table: daria_krasavina.gm_voc.qualtrics_audio_transcripts_sentence_level_sample_data
+              themes_table: daria_krasavina.gm_voc.voc_discovered_themes
+              assignments_table: daria_krasavina.gm_voc.voc_theme_assignments
+              date_start: "2025-07-01"
+              date_end: "2026-06-30"
+              embedding_endpoint: databricks-gte-large-en
+              gen_endpoint: databricks-meta-llama-3-3-70b-instruct
+              num_clusters: "12"
+              sample_limit: "3000"
+
+        # Compare AI vs rules; needs the AI tags (this run) and the rule tags
+        # (produced by voc_topic_model_job). Run the rule job first.
+        - task_key: compare_approaches
+          depends_on:
+            - task_key: ai_classify
+          notebook_task:
+            notebook_path: ./topic_model/run_compare_notebook.py
+            base_parameters:
+              rule_tags_table: daria_krasavina.gm_voc.voc_topic_tags
+              ai_tags_table: daria_krasavina.gm_voc.voc_ai_topic_tags
+              comparison_table: daria_krasavina.gm_voc.voc_approach_comparison
       queue:
         enabled: true

@@ -109,15 +109,22 @@ def build_body():
 
     b.append(para("1. What it is", style="Heading1"))
     b.append(para(
-        "A system that replicates GM's Qualtrics XM Discover topic-tagging on "
-        "Databricks. It takes contact-center call transcripts sentence by "
-        "sentence, applies GM's existing rule-based topic model, and outputs "
-        "which topics each sentence matches — so Databricks results can be "
-        "validated 1:1 against the current Qualtrics control set."))
+        "A system that classifies GM contact-center call transcripts by topic on "
+        "Databricks, using two complementary tracks: (1) a deterministic rule "
+        "engine that faithfully replicates GM's Qualtrics XM Discover logic, and "
+        "(2) an ML / NLP track built on Databricks' native AI functions "
+        "(ai_classify, ai_analyze_sentiment, ai_query embeddings, ai_gen). "
+        "Both operate at sentence grain so results can be validated against the "
+        "current Qualtrics control set."))
     b.append(para(
-        "Core design decision: the matching logic is pure Python with zero "
+        "Track 1 design decision: the matching logic is pure Python with zero "
         "dependencies, so the exact same code runs inside a Spark job at scale "
         "on Databricks and can be unit-tested locally without a cluster."))
+    b.append(para(
+        "Track 2 rationale: Databricks AI functions provide a lighter-weight "
+        "alternative to a custom ML model — nothing to train, host, or retrain — "
+        "so GM does not own long-term model maintenance. The rule engine remains "
+        "the deterministic control the ML track is regressed against."))
 
     b.append(para("2. The four topics it tags", style="Heading1"))
     b.append(para("From two branches of GM's APM hierarchy:"))
@@ -126,7 +133,36 @@ def build_body():
     b.append(bullet("Loyalty → Rewards → Points"))
     b.append(bullet("Loyalty → Rewards → Points → Redeem"))
 
-    b.append(para("3. Files — core engine", style="Heading1"))
+    b.append(para("3. The three classification approaches", style="Heading1"))
+    b.append(para(
+        "The POC evaluates whether Databricks can replicate and improve on GM's "
+        "XM Discover tagging, so three methods were built, from most "
+        "deterministic to most ML, plus a job that compares them."))
+    b.append(table([
+        ("Approach", "What it is / trade-offs"),
+        ("1. Rule engine  (rule_engine.py, tagger.py, voc_topic_model_job.py)",
+         "Faithful re-implementation of GM's XM Discover swim-lane rules. "
+         "Deterministic, explainable, zero model cost, exact control replica. "
+         "Trade-off: manual rule upkeep; misses novel phrasing."),
+        ("2. AI classification  (ai_classify_job.py)",
+         "An LLM assigns each sentence to a topic via ai_classify, steered by "
+         "the topic's business definition; ai_analyze_sentiment adds sentiment. "
+         "No keyword maintenance; handles paraphrase. Trade-off: "
+         "non-deterministic; per-call cost."),
+        ("3. Topic discovery  (topic_discovery_job.py)",
+         "Unsupervised: ai_query embeds sentences, Spark MLlib KMeans clusters "
+         "them by meaning, ai_gen auto-names themes. Finds themes nobody defined "
+         "(the “global other” problem). Trade-off: clusters need interpretation."),
+        ("Comparison  (compare_approaches_job.py)",
+         "Agreement analysis: rules vs. AI per topic (overlap, rule-only, "
+         "AI-only, precision/recall/F1). The regression-vs-control deliverable."),
+    ]))
+    b.append(para(
+        "The AI classifier reads its topic definitions from the same rules.json "
+        "the rule engine uses, so both tracks classify against identical topics.",
+        bold=True))
+
+    b.append(para("4. Files — rule engine (Track 1)", style="Heading1"))
     b.append(table([
         ("File", "Purpose"),
         ("rule_engine.py",
@@ -147,7 +183,7 @@ def build_body():
          "hand-transcribed."),
     ]))
 
-    b.append(para("4. Files — runners", style="Heading1"))
+    b.append(para("5. Files — rule-engine runners", style="Heading1"))
     b.append(table([
         ("File", "Purpose"),
         ("voc_topic_model_job.py",
@@ -163,7 +199,31 @@ def build_body():
          "no cluster needed — used to validate everything locally."),
     ]))
 
-    b.append(para("5. Files — outputs & validation", style="Heading1"))
+    b.append(para("6. Files — ML / NLP track (Track 2)", style="Heading1"))
+    b.append(table([
+        ("File", "Purpose"),
+        ("ai_classify_job.py",
+         "AI topic classification. Uses ai_classify (LLM assigns each sentence "
+         "to a topic, steered by the topic's business definition from rules.json) "
+         "and ai_analyze_sentiment. Writes voc_ai_topic_tags."),
+        ("topic_discovery_job.py",
+         "Unsupervised topic discovery. Embeds sentences via "
+         "ai_query('databricks-gte-large-en'), clusters with Spark MLlib KMeans, "
+         "auto-names themes with ai_gen. Writes voc_discovered_themes + "
+         "voc_theme_assignments."),
+        ("compare_approaches_job.py",
+         "Agreement analysis between the rule tags and AI tags per topic; "
+         "precision/recall/F1 with the rule engine as proxy control. "
+         "Writes voc_approach_comparison."),
+        ("run_ai_classify_notebook.py / run_topic_discovery_notebook.py / "
+         "run_compare_notebook.py",
+         "Thin Databricks notebook entrypoints for the three ML jobs."),
+        ("ML_APPROACH.md",
+         "Documents the three approaches, requirements (serverless + DBR 18.2+), "
+         "cost notes, output tables, and caveats to verify on first real run."),
+    ]))
+
+    b.append(para("7. Files — outputs & validation", style="Heading1"))
     b.append(table([
         ("File", "Purpose"),
         ("build_dashboard.py",
@@ -177,22 +237,26 @@ def build_body():
          "topical content to tag."),
     ]))
 
-    b.append(para("6. Files — deployment & docs", style="Heading1"))
+    b.append(para("8. Files — deployment & docs", style="Heading1"))
     b.append(table([
         ("File", "Purpose"),
         ("databricks.yml",
-         "Databricks Asset Bundle — defines the job as a serverless task and "
-         "deploys it. Deployed to the daria_k_sandbox workspace."),
+         "Databricks Asset Bundle — defines two jobs (voc_topic_model_job for "
+         "rules; voc_ai_pipeline_job for AI classify + discovery + compare) as "
+         "serverless tasks. Deployed to the daria_k_sandbox workspace."),
         ("README.md", "How everything fits together and how to run it."),
+        ("ML_APPROACH.md", "The three-approach ML strategy and AI-track details."),
         ("VALIDATION_SUMMARY.md",
          "POC deliverable: what was built, what the data showed, and "
          "strengths / gaps / recommendations."),
+        ("architecture_diagram.html",
+         "Rendered component map + runtime flow diagrams for both tracks."),
         (".gitignore",
          "Keeps generated outputs, the venv, and the client requirements docs "
          "out of git."),
     ]))
 
-    b.append(para("7. Key findings", style="Heading1"))
+    b.append(para("9. Key findings", style="Heading1"))
     b.append(bullet(
         "The provided sample data is synthetic (OnStar roadside dialogue, ~40 "
         "distinct sentences, zero topic vocabulary), so a real run correctly "
@@ -206,17 +270,24 @@ def build_body():
         "Data join verified: sentence.natural_id == metadata.natural_id (1:1 on "
         "the sample). The global scope filter passes ~43% of the sample "
         "(English + audio + customer-side)."))
+    b.append(bullet(
+        "ML-track caveats to verify on first real run: the ai_classify v2.x "
+        "return shape (struct vs. string) and the embedding return format are "
+        "runtime-sensitive (handled defensively in code), and the AI functions "
+        "require serverless compute + DBR 18.2+ and are pay-per-token."))
 
-    b.append(para("8. Status", style="Heading1"))
-    b.append(bullet("Built, tested (33/33), validated end-to-end locally."))
-    b.append(bullet("Deployed to Databricks (daria_k_sandbox) as an Asset Bundle."))
+    b.append(para("10. Status", style="Heading1"))
+    b.append(bullet("Track 1 (rules): built, tested (33/33), validated end-to-end locally."))
+    b.append(bullet("Track 2 (ML/NLP): ai_classify, topic-discovery, and comparison jobs built and compile; wired into the bundle."))
+    b.append(bullet("Both jobs deployed to Databricks (daria_k_sandbox) as an Asset Bundle."))
     b.append(bullet("Client requirement docs scrubbed from git history; repo made private."))
-    b.append(bullet("Pending: final force-push of the cleaned code to GitHub."))
+    b.append(bullet("Pending: run the ML pipeline against real input tables (needs the daria_krasavina.gm_voc tables loaded)."))
 
-    b.append(para("9. Recommended next steps", style="Heading1"))
-    b.append(bullet("Load real, de-identified representative data into the POC schema and rerun the job."))
-    b.append(bullet("Join the Databricks tags to the XM Discover control tags per node for a precision/recall comparison."))
-    b.append(bullet("Capture cost (DBU) and throughput at target volume for the scaling story; run the rerun-after-rule-change repeatability benchmark."))
+    b.append(para("11. Recommended next steps", style="Heading1"))
+    b.append(bullet("Load real, de-identified representative data into the POC schema and rerun both tracks."))
+    b.append(bullet("Compare AI classifier and rule engine against GM's XM Discover control tags per node (precision/recall)."))
+    b.append(bullet("Review the discovered themes with SMEs to identify emergent topics beyond the four defined nodes."))
+    b.append(bullet("Capture cost (DBU + AI-function token cost) and throughput at target volume; run the rerun repeatability benchmark."))
     b.append(bullet("Swap the sentence-ordering proxy for Andrew's multi-field ranking logic once provided."))
 
     return "".join(b)

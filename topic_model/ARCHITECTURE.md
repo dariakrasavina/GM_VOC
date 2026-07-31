@@ -1,32 +1,18 @@
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>GM VOC POC — Architecture & Execution Flow</title>
-  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-  <style>
-    body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-           margin: 28px; color: #1a1a1a; }
-    h1 { font-size: 22px; color: #1F3864; }
-    h2 { font-size: 16px; margin-top: 28px; color: #1f6feb;
-         border-bottom: 1px solid #eee; padding-bottom: 4px; }
-    .diagram { background: #fafbfc; border: 1px solid #e6edf3;
-               border-radius: 8px; padding: 12px; overflow-x: auto; }
-    p.note { color: #666; font-size: 13px; }
-  </style>
-</head>
-<body>
-  <h1>GM Voice of Customer POC — Architecture &amp; Execution Flow</h1>
-  <p class="note">Databricks topic-model replication of Qualtrics XM Discover,
-     with two classification tracks — a deterministic <b>rule engine</b> and an
-     <b>ML / NLP</b> track built on Databricks AI functions (<code>ai_classify</code>,
-     <code>ai_analyze_sentiment</code>, <code>ai_query</code> embeddings + KMeans,
-     <code>ai_gen</code>). Diagrams below: (1) component map &amp; build-time flow,
-     (2) rule-track runtime order, (3) ML-track runtime order.</p>
+# GM VOC POC — Architecture (Mermaid)
 
-  <h2>1. Component map &amp; build-time flow</h2>
-  <div class="diagram">
-  <pre class="mermaid">
+Databricks topic-model replication of Qualtrics XM Discover, with two
+classification tracks: a deterministic **rule engine** and an **ML / NLP** track
+built on Databricks AI functions (`ai_classify`, `ai_analyze_sentiment`,
+`ai_query` embeddings + KMeans, `ai_gen`).
+
+These diagrams render natively on GitHub and in any Mermaid viewer
+(e.g. https://mermaid.live). An HTML version is in `architecture_diagram.html`.
+
+---
+
+## 1. Component map & build-time flow
+
+```mermaid
 flowchart TB
     subgraph SRC["Source of truth (client rules)"]
         XLSX["Qualtrics_Parent_and_Leaf_Nodes.xlsx<br/>(4 topic nodes + global filter)"]
@@ -77,12 +63,13 @@ flowchart TB
     YML --> DISC
     JOB --> CMP
     AICLS --> CMP
-  </pre>
-  </div>
+```
 
-  <h2>2. Runtime execution order (Databricks)</h2>
-  <div class="diagram">
-  <pre class="mermaid">
+---
+
+## 2. Runtime execution order — rule track (`voc_topic_model_job`)
+
+```mermaid
 sequenceDiagram
     participant U as You (CLI)
     participant B as Asset Bundle
@@ -109,12 +96,13 @@ sequenceDiagram
     J->>UC: write voc_topic_tags (per sentence)
     J->>UC: write voc_topic_frequencies (aggregates)
     J-->>U: done
-  </pre>
-  </div>
+```
 
-  <h2>3. Runtime execution order — ML / NLP track (voc_ai_pipeline_job)</h2>
-  <div class="diagram">
-  <pre class="mermaid">
+---
+
+## 3. Runtime execution order — ML / NLP track (`voc_ai_pipeline_job`)
+
+```mermaid
 sequenceDiagram
     participant U as You (CLI)
     participant W as Databricks (serverless, DBR 18.2+)
@@ -150,26 +138,21 @@ sequenceDiagram
     W->>UC: write voc_approach_comparison
     end
     W-->>U: done
-  </pre>
-  </div>
+```
 
-  <h2>Reading it</h2>
-  <p class="note">
-  <b>Build time:</b> the client Excel drives <code>rules.json</code>; the engine
-  (<code>rule_engine.py</code> + <code>tagger.py</code>) is validated by tests
-  and the local runner before it ever reaches Spark. The same
-  <code>rules.json</code> topic definitions steer the AI classifier, so both
-  tracks classify against identical topics.<br/>
-  <b>Track 1 (rules):</b> the same engine runs inside the Spark
-  <code>pandas_udf</code>, so local and production results are identical —
-  deterministic, explainable, the XM Discover control replica.<br/>
-  <b>Track 2 (ML/NLP):</b> Databricks AI functions classify by meaning
-  (<code>ai_classify</code>), add sentiment (<code>ai_analyze_sentiment</code>),
-  and discover emergent themes (embeddings + KMeans + <code>ai_gen</code>) — no
-  model to train or maintain. The compare job regresses AI against the rule
-  control. Requires serverless compute + DBR 18.2+; AI calls are pay-per-token.
-  </p>
+---
 
-  <script>mermaid.initialize({ startOnLoad: true, theme: "neutral" });</script>
-</body>
-</html>
+## Reading it
+
+- **Build time:** the client Excel drives `rules.json`; the engine
+  (`rule_engine.py` + `tagger.py`) is validated by tests and the local runner
+  before it ever reaches Spark. The same `rules.json` topic definitions steer
+  the AI classifier, so both tracks classify against identical topics.
+- **Track 1 (rules):** the same engine runs inside the Spark `pandas_udf`, so
+  local and production results are identical — deterministic, explainable, the
+  XM Discover control replica.
+- **Track 2 (ML/NLP):** Databricks AI functions classify by meaning
+  (`ai_classify`), add sentiment (`ai_analyze_sentiment`), and discover emergent
+  themes (embeddings + KMeans + `ai_gen`) — no model to train or maintain. The
+  compare job regresses AI against the rule control. Requires serverless compute
+  + DBR 18.2+; AI calls are pay-per-token.

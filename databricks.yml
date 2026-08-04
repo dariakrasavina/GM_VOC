@@ -41,8 +41,7 @@ resources:
 
     # ----------------------------------------------------------------------
     # Track 2 — lightweight AI-powered solution (Databricks AI functions):
-    # AI classify -> topic discovery -> compare.
-    # AI functions require serverless compute + DBR 18.2+.
+    # AI classify + topic discovery. AI functions require serverless + DBR 18.2+.
     # ----------------------------------------------------------------------
     voc_ai_pipeline_job:
       name: "[${bundle.target}] GM VOC Lightweight AI Solution (ai_classify + discovery)"
@@ -72,12 +71,18 @@ resources:
               gen_endpoint: databricks-meta-llama-3-3-70b-instruct
               num_clusters: "12"
               sample_limit: "200"
+      queue:
+        enabled: true
 
-        # Compare AI vs rules; needs the AI tags (this run) and the rule tags
-        # (produced by voc_topic_model_job). Run the rule job first.
+    # ----------------------------------------------------------------------
+    # Cross-track comparison — rules (Track 1) vs. ai_classify (Track 2).
+    # Standalone job: run it AFTER both voc_topic_model_job and
+    # voc_ai_pipeline_job have produced their tag tables.
+    # ----------------------------------------------------------------------
+    voc_compare_job:
+      name: "[${bundle.target}] GM VOC Compare (rules vs AI)"
+      tasks:
         - task_key: compare_approaches
-          depends_on:
-            - task_key: ai_classify
           notebook_task:
             notebook_path: ./ai_solution/run_compare_notebook.py
             base_parameters:

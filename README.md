@@ -1,57 +1,77 @@
 # GM Voice of Customer (VOC) — Databricks POC
 
-Proof of concept evaluating whether **Databricks** can replicate — and improve on —
-GM's **Qualtrics XM Discover** topic tagging over contact-center call transcripts.
+A proof of concept for tagging GM contact-center call transcripts on
+**Databricks**, to see whether it can match GM's current **Qualtrics XM Discover**
+setup. Everything works at the **sentence level**: each sentence gets a topic
+and, optionally, a sentiment.
 
-It analyzes call transcripts at **sentence grain**, using three complementary
-tracks — mirroring the blend Qualtrics actually documents (rules + LLM + a
-trained transformer):
+## The three tracks
 
-1. **Rule engine** — a deterministic re-implementation of GM's XM Discover
-   swim-lane rules (the control replica).
-2. **Lightweight AI-powered solution** — Databricks' native AI functions
-   (`ai_classify`, `ai_analyze_sentiment`, `ai_query` embeddings + KMeans,
-   `ai_gen`) — no custom model to train, host, or maintain.
-3. **Trained transformer sentiment model** — a fine-tuned DistilBERT emitting
-   5-class sentiment (Very Positive … Very Negative), MLflow-tracked and
-   registered in Unity Catalog, with a VADER lexicon baseline. This mirrors
-   Qualtrics' documented lexicon→transformer evolution.
+Two of the tracks do the **same job** (topic tagging) in different ways, so we
+can **compare them and pick the best**. The third track does a **different job**
+(sentiment) and is meant to be **used alongside** whichever topic track wins.
 
-Tracks 1–2 write per-sentence topic tags (validated against GM's Qualtrics
-output); Track 3 adds owned, servable sentiment.
+| Track | Job it does | How it works | Role |
+|-------|-------------|--------------|------|
+| **1 — Rule engine** | Topic tagging | Keyword/boolean rules (the same logic GM uses today). Same answer every time; easy to explain. | Compared with Track 2 |
+| **2 — AI functions** | Topic tagging (+ can discover new topics) | Databricks AI functions: an LLM reads each sentence and picks a topic; can also group sentences into new themes it finds on its own. | Compared with Track 1 |
+| **3 — Sentiment model** | Sentiment (how the customer feels) | A trained model that rates each sentence from Very Negative to Very Positive. | Used together with Track 1 or 2 |
+
+**How to read this:** Track 1 vs. Track 2 is a **bake-off** for topic tagging — a
+separate comparison job scores how much they agree and where they differ, so GM
+can choose one (or blend them). Track 3 is **complementary**: it adds "how does
+the customer feel?" on top of "what are they talking about?"
+
+```mermaid
+flowchart LR
+    T1["Track 1: Rule engine<br/>(topic tags)"]
+    T2["Track 2: AI functions<br/>(topic tags)"]
+    CMP{{"Compare<br/>rules vs AI"}}
+    T3["Track 3: Sentiment model<br/>(how they feel)"]
+
+    T1 --> CMP
+    T2 --> CMP
+    CMP --> PICK["Pick the best<br/>topic approach"]
+    PICK --> COMBO["Topic + Sentiment<br/>per sentence"]
+    T3 --> COMBO
+```
 
 ---
 
-## The four POC topics
+## The four topics we tag
 
-Two branches of GM's Automotive Production Model (APM) hierarchy, chosen for
-meaningful volume, encoded verbatim from the source workbook:
+Chosen from GM's topic hierarchy because they have enough volume to test with:
 
 1. Contact Center → Dissatisfied With Advisor → **Confusing / Makes No Sense**
 2. Contact Center → Dissatisfied With Advisor → **Inaccurate Information**
 3. Loyalty → Rewards → **Points**
 4. Loyalty → Rewards → Points → **Redeem**
 
-A global "DBX POC" filter scopes to **English + audio + customer-side** verbatims
-and strips IVR/boilerplate before any topic is applied.
+Before tagging, we keep only **English, audio, customer-side** sentences (and
+drop automated/IVR boilerplate).
 
 ---
 
-## The two tracks (and the maintenance trade-off)
+## What each track does, in plain terms
 
-| Track | Approach | What it is | Trade-offs |
-|-------|----------|-----------|-----------|
-| **1** | Rule engine | Faithful XM Discover swim-lane replica (OR/AND/NOT, phrases, wildcards, fuzzy, proximity). Deterministic, explainable, zero model cost, exact control replica. | Manual rule upkeep; misses novel phrasing. |
-| **2a** | AI classification | `ai_classify` (a hosted LLM) assigns each sentence to a topic, steered by the topic's business definition; `ai_analyze_sentiment` adds sentiment. | Non-deterministic; per-call cost. |
-| **2b** | Topic discovery | Unsupervised: `ai_query` embeds sentences, KMeans clusters by meaning, `ai_gen` auto-names themes — finds themes nobody defined. | Clusters need human interpretation. |
-| **3** | Trained transformer sentiment | Fine-tuned DistilBERT for 5-class sentiment, weak-labeled via LLM, MLflow-tracked + UC-registered; VADER lexicon baseline. Owned, servable, zero token cost at inference. | Needs labels (bootstrapped); GPU to train. |
-| — | Comparison | Agreement analysis: rules vs. AI per topic (overlap, precision/recall/F1). | Uses rules as *proxy* control, not GM's true XM Discover output. |
+**Track 1 — Rule engine.** Re-creates GM's existing keyword rules (words that
+must appear, words that must not, phrases, wildcards, "these words near each
+other"). It's deterministic (same input → same output) and fully explainable —
+you can see exactly which words triggered a tag. Downside: someone has to
+maintain the rules, and it misses wording the rules didn't anticipate.
 
-Track 2 is a **lightweight AI-powered solution** (hosted models, no upkeep).
-Track 3 is the **custom trained ML** track — the one Qualtrics technique they
-explicitly disclose (a single transformer, *not* an ensemble; research found no
-evidence Qualtrics uses ensembles, and they're a poor fit here given no labels
-and the need for determinism/explainability). See `docs/SENTIMENT_MODEL.md`.
+**Track 2 — AI functions.** Uses Databricks' built-in AI functions. An LLM
+(`ai_classify`) reads a sentence and assigns it to one of the four topics. A
+second capability (`ai_query` embeddings + clustering + `ai_gen`) can **discover
+new themes** that nobody wrote rules for. Downside: costs a bit per call and
+isn't perfectly repeatable.
+
+**Track 3 — Sentiment model.** A trained model (fine-tuned DistilBERT) that
+rates each sentence's sentiment on a 5-point scale (Very Negative → Very
+Positive), with a simple word-list ("VADER") version as a baseline to compare
+against. It's registered in MLflow so GM would own it and run it cheaply.
+Because we have no labeled examples yet, we bootstrap training labels with an
+LLM — so treat it as a starting model to refine once people review real data.
 
 ---
 
@@ -59,287 +79,107 @@ and the need for determinism/explainability). See `docs/SENTIMENT_MODEL.md`.
 
 ```
 gm_voc/
-├── rule_engine/     Track 1 — rule_engine.py, tagger.py, voc_topic_model_job.py,
-│                    run_job_notebook.py, run_local.py, build_dashboard.py,
-│                    test_rule_engine.py
-├── ai_solution/     Track 2 — ai_classify_job.py, topic_discovery_job.py,
-│                    compare_approaches_job.py + 3 run_*_notebook.py entrypoints
-├── sentiment_model/ Track 3 — train_sentiment_model.py, vader_baseline.py,
-│                    score_sentiment.py + 2 run_*_notebook.py entrypoints
-├── shared/          rules.json (topic rules as data) + build_rules_config.py +
-│                    make_demo_fixture.py — used by the topic tracks
-├── docs/            README, ARCHITECTURE, LIGHTWEIGHT_AI_SOLUTION,
-│                    SENTIMENT_MODEL, VALIDATION_SUMMARY, architecture_diagram.html
+├── rule_engine/     Track 1 — the rule engine + its Databricks job
+├── ai_solution/     Track 2 — the AI-function jobs + the compare job
+├── sentiment_model/ Track 3 — the sentiment training + scoring jobs
+├── shared/          rules.json (the topic rules) + helper scripts
+├── docs/            architecture diagrams + write-ups
 ├── test_data/       sample + demo CSVs
-└── databricks.yml   Asset Bundle: voc_topic_model_job + voc_ai_pipeline_job +
-                     voc_sentiment_model_job
+└── databricks.yml   Databricks Asset Bundle (defines the jobs)
 ```
 
-`rule_engine.py` and `tagger.py` **never import pyspark**, which is exactly why
-the same matching logic runs inside a Spark `pandas_udf` on the cluster *and* is
-unit-testable on a laptop with no JVM.
+The rule logic is plain Python (no Spark), so the **same code** runs at scale on
+Databricks and can be tested on a laptop.
 
 ---
 
 ## Data
 
-- **Inputs** (Unity Catalog): a sentence-level transcript table and a call-level
-  metadata table.
-- **Join:** `sentence.natural_id == metadata.natural_id` (verified 1:1 on the
-  sample; `id_document == case_id == document_id` is an equivalent key).
-- **Grain:** sentence-level (the `words` column).
-- **Date range:** `document_date` in 2025-07-01 … 2026-06-30.
+- **Inputs:** a sentence-level transcript table and a call-level metadata table.
+- **Join:** `sentence.natural_id == metadata.natural_id`.
+- **Grain:** one row per sentence (the `words` column).
 
 ---
 
-## Architecture
+## How it runs
 
-### 1. Component map & build-time flow
+There are four jobs (defined in `databricks.yml`):
 
 ```mermaid
 flowchart TB
-    subgraph SRC["Source of truth (client rules)"]
-        XLSX["Qualtrics_Parent_and_Leaf_Nodes.xlsx<br/>(4 topic nodes + global filter)"]
-    end
+    RULES["voc_topic_model_job<br/>Track 1 — rule tags"]
+    AI["voc_ai_pipeline_job<br/>Track 2 — AI tags + theme discovery"]
+    CMP["voc_compare_job<br/>rules vs AI agreement"]
+    SENT["voc_sentiment_model_job<br/>Track 3 — train + score sentiment"]
 
-    subgraph GEN["Rule config generation (one-time / on change)"]
-        BUILD["shared/build_rules_config.py"]
-        RULES["shared/rules.json<br/>(hierarchy + lane rules as data)"]
-    end
-
-    subgraph ENGINE["Engine (pure Python, no pyspark)"]
-        RE["rule_engine.py<br/>parser + evaluator:<br/>OR / AND / NOT, phrases,<br/>wildcards, fuzzy, proximity, attr:"]
-        TG["tagger.py<br/>global scope filter + 4 topic nodes"]
-        TEST["test_rule_engine.py<br/>33 unit tests"]
-    end
-
-    subgraph LOCAL["Local validation (stdlib only)"]
-        FIX["make_demo_fixture.py<br/>schema-identical demo CSVs"]
-        RL["run_local.py<br/>load - join - filter - tag"]
-        OUT["outputs/<br/>tagged_sentences.csv,<br/>topic_frequencies.csv,<br/>representative_verbatims.json,<br/>run_summary.json"]
-        DASH["build_dashboard.py -> dashboard.html"]
-    end
-
-    subgraph PROD["Databricks — Track 1: rule engine"]
-        JOB["voc_topic_model_job.py<br/>PySpark + pandas_udf"]
-        NB["run_job_notebook.py<br/>(entrypoint notebook)"]
-        YML["databricks.yml<br/>(Asset Bundle)"]
-    end
-
-    subgraph MLT["Databricks — Track 2: Lightweight AI-powered solution (AI functions)"]
-        AICLS["ai_classify_job.py<br/>ai_classify + ai_analyze_sentiment"]
-        DISC["topic_discovery_job.py<br/>ai_query embeddings + KMeans + ai_gen"]
-        CMP["compare_approaches_job.py<br/>rules vs AI agreement"]
-    end
-
-    XLSX --> BUILD --> RULES
-    RULES --> TG
-    RE --> TG
-    RE --> TEST
-    TG --> RL
-    TG --> JOB
-    FIX --> RL
-    RL --> OUT --> DASH
-    YML --> NB --> JOB
-    RULES -. shipped with job .-> JOB
-    RULES -. topic definitions .-> AICLS
-    YML --> AICLS
-    YML --> DISC
-    JOB --> CMP
-    AICLS --> CMP
+    RULES --> CMP
+    AI --> CMP
 ```
 
-### 2. Runtime execution order — rule track (`voc_topic_model_job`)
+- **`voc_topic_model_job`** (Track 1) → writes `voc_topic_tags`
+- **`voc_ai_pipeline_job`** (Track 2) → writes `voc_ai_topic_tags` + discovered themes
+- **`voc_compare_job`** → reads both tag tables, writes the rules-vs-AI comparison
+  (run it *after* the two above)
+- **`voc_sentiment_model_job`** (Track 3) → trains + scores sentiment (independent)
 
-```mermaid
-sequenceDiagram
-    participant U as You (CLI)
-    participant B as Asset Bundle
-    participant W as Databricks Workspace
-    participant N as run_job_notebook.py
-    participant J as voc_topic_model_job.run()
-    participant UDF as pandas_udf (tagger + rule_engine)
-    participant UC as Unity Catalog (Delta)
-
-    U->>B: databricks bundle deploy
-    B->>W: upload rule_engine/ + shared/ + create job
-    U->>B: databricks bundle run
-    B->>W: trigger job (serverless)
-    W->>N: run entrypoint notebook
-    N->>N: add folder to sys.path
-    N->>J: import job and call run()
-    J->>J: get_params() from widgets
-    J->>UC: read sentence_table + metadata_table
-    J->>J: join on natural_id, filter document_date range
-    J->>UDF: apply tag_udf over struct(words + attrs)
-    UDF->>UDF: in_scope() global filter -> tag() 4 nodes
-    UDF-->>J: JSON {in_scope, topics:{id:[terms]}}
-    J->>J: explode to per-topic columns + __terms
-    J->>UC: write voc_topic_tags (per sentence)
-    J->>UC: write voc_topic_frequencies (aggregates)
-    J-->>U: done
-```
-
-### 3. Runtime execution order — lightweight AI-powered solution (`voc_ai_pipeline_job`)
-
-```mermaid
-sequenceDiagram
-    participant U as You (CLI)
-    participant W as Databricks (serverless, DBR 18.2+)
-    participant AI as AI functions (LLM / embeddings)
-    participant ML as Spark MLlib KMeans
-    participant UC as Unity Catalog (Delta)
-
-    U->>W: databricks bundle run voc_ai_pipeline_job
-
-    rect rgb(235,244,255)
-    Note over W,UC: Task A — ai_classify_job
-    W->>UC: read + scope verbatims (EN / audio / customer)
-    W->>AI: ai_classify(words, topic definitions from rules.json)
-    W->>AI: ai_analyze_sentiment(words)
-    AI-->>W: topic label + confidence + sentiment
-    W->>UC: write voc_ai_topic_tags
-    end
-
-    rect rgb(238,247,238)
-    Note over W,UC: Task B — topic_discovery_job
-    W->>AI: ai_query('databricks-gte-large-en', words) embeddings
-    AI-->>W: dense vectors
-    W->>ML: KMeans cluster vectors into themes
-    ML-->>W: theme_id per sentence
-    W->>AI: ai_gen(examples) name + summarize each theme
-    W->>UC: write voc_discovered_themes + voc_theme_assignments
-    end
-
-    rect rgb(252,244,235)
-    Note over W,UC: Task C — compare_approaches_job (after A + rule job)
-    W->>UC: read voc_topic_tags (rules) + voc_ai_topic_tags (AI)
-    W->>W: agreement, rule-only, AI-only, precision/recall/F1
-    W->>UC: write voc_approach_comparison
-    end
-    W-->>U: done
-```
-
-### 4. Runtime execution order — trained sentiment model (`voc_sentiment_model_job`)
-
-```mermaid
-sequenceDiagram
-    participant U as You (CLI)
-    participant W as Databricks (DBR ML + GPU)
-    participant AI as LLM (ai_query, weak labeling)
-    participant HF as HuggingFace Trainer (DistilBERT)
-    participant ML as MLflow / Unity Catalog
-    participant UC as Unity Catalog (Delta)
-
-    U->>W: databricks bundle run voc_sentiment_model_job
-
-    rect rgb(235,244,255)
-    Note over W,UC: Task A — train_sentiment_model
-    W->>UC: scope + sample verbatims
-    W->>AI: ai_query weak-label 5-class sentiment
-    AI-->>W: Very Neg .. Very Pos labels
-    W->>UC: write voc_sentiment_weak_labels (audit)
-    W->>HF: fine-tune DistilBERT on weak labels
-    HF-->>W: model + accuracy / macro-F1
-    W->>ML: log params/metrics/model, register in UC
-    end
-
-    rect rgb(238,247,238)
-    Note over W,UC: Task B — score_sentiment
-    W->>ML: load registered transformer
-    W->>W: score verbatims (transformer) + VADER lexicon baseline
-    W->>UC: write voc_sentiment_scored (both methods per sentence)
-    end
-    W-->>U: done
-```
-
-> A rendered HTML version of the topic-track diagrams is in
-> `docs/architecture_diagram.html`. Full Mermaid source: `docs/ARCHITECTURE.md`.
-
----
-
-## Running
-
-### Locally (rule engine, no cluster needed)
-
-```bash
-# regenerate rules from the workbook (only if the workbook changed)
-python3 shared/build_rules_config.py
-
-# unit tests
-python3 rule_engine/test_rule_engine.py
-
-# run over the provided sample CSVs
-python3 rule_engine/run_local.py --out outputs/
-
-# demo run that actually tags (schema-identical realistic verbatims)
-python3 shared/make_demo_fixture.py
-python3 rule_engine/run_local.py \
-  --sentences test_data/demo_sentence_level.csv \
-  --metadata  test_data/demo_metadata.csv --out outputs_demo/
-python3 rule_engine/build_dashboard.py --out outputs_demo/
-```
-
-### On Databricks (both tracks)
+### Run on Databricks
 
 ```bash
 databricks bundle deploy -t sandbox -p <profile>
 
-# Track 1 (rules) — produces the control tags the comparison needs
-databricks bundle run voc_topic_model_job -t sandbox -p <profile>
-
-# Track 2 (AI classify + discovery + compare)
-databricks bundle run voc_ai_pipeline_job -t sandbox -p <profile>
-
-# Track 3 (train transformer sentiment model + score) — needs DBR ML / GPU
-databricks bundle run voc_sentiment_model_job -t sandbox -p <profile>
+databricks bundle run voc_topic_model_job    -t sandbox -p <profile>   # Track 1
+databricks bundle run voc_ai_pipeline_job     -t sandbox -p <profile>   # Track 2
+databricks bundle run voc_compare_job         -t sandbox -p <profile>   # compare (after 1 & 2)
+databricks bundle run voc_sentiment_model_job -t sandbox -p <profile>   # Track 3
 ```
 
-Table names and date range are job parameters in `databricks.yml`. The AI track
-requires **serverless compute + Databricks Runtime 18.2+** in a Model-Serving
-region, and AI functions are **pay-per-token** (both AI jobs default to a
-bounded `sample_limit`).
+### Run the rule engine locally (no cluster)
+
+```bash
+python3 rule_engine/test_rule_engine.py            # unit tests
+python3 rule_engine/run_local.py --out outputs/    # tag the sample CSVs
+
+# demo data that actually contains the topics:
+python3 shared/make_demo_fixture.py
+python3 rule_engine/run_local.py \
+  --sentences test_data/demo_sentence_level.csv \
+  --metadata  test_data/demo_metadata.csv --out outputs_demo/
+```
 
 ---
 
 ## Output tables (`daria_krasavina.gm_voc`)
 
-| Table | Produced by | Contents |
-|-------|-------------|----------|
-| `voc_topic_tags` | rules | per-sentence topic flags + matched terms ("chicklets") |
-| `voc_topic_frequencies` | rules | topic counts |
-| `voc_ai_topic_tags` | AI classify | per-sentence AI topic + confidence + sentiment |
-| `voc_discovered_themes` | discovery | emergent themes with names/summaries |
-| `voc_theme_assignments` | discovery | sentence → theme_id |
-| `voc_approach_comparison` | compare | rules-vs-AI agreement per topic |
-| `voc_sentiment_weak_labels` | sentiment train | verbatim + LLM weak label (audit) |
-| `voc_sentiment_transformer` (UC model) | sentiment train | registered fine-tuned DistilBERT |
-| `voc_sentiment_scored` | sentiment score | transformer + VADER sentiment per sentence |
+| Table | From | Contents |
+|-------|------|----------|
+| `voc_topic_tags` | Track 1 | topic tags per sentence + the words that triggered them |
+| `voc_ai_topic_tags` | Track 2 | AI topic + sentiment per sentence |
+| `voc_discovered_themes` / `voc_theme_assignments` | Track 2 | new themes the AI found |
+| `voc_approach_comparison` | compare | how much rules and AI agree, per topic |
+| `voc_sentiment_scored` | Track 3 | sentiment per sentence (trained model + baseline) |
 
 ---
 
-## Status & key findings
+## Status
 
-- **Track 1 (rules):** built, **33/33 unit tests pass**, validated end-to-end locally.
-- **Track 2 (AI solution):** ai_classify, topic-discovery, and comparison jobs
-  built and compile; wired into the bundle.
-- Both jobs **deployed** to the Databricks sandbox as an Asset Bundle.
-- **The provided sample data is synthetic** (OnStar roadside dialogue, ~40
-  distinct sentences, none containing the four topics' vocabulary), so a real
-  run correctly tags **0** sentences. The demo fixture proves the engine handles
-  the hard cases (dealer exclusion, negation, agent-side filtering, and
-  "he wants to redeem his points" → Points but not Redeem).
-- Data join and scope filter verified (~43% of the sample is in scope).
+- **Track 1 (rules):** built, 33/33 unit tests pass, validated locally.
+- **Track 2 (AI functions):** runs on Databricks and writes tags.
+- **Track 3 (sentiment):** training/scoring jobs run on Databricks; the baseline
+  runs locally.
+- All jobs are deployed to the Databricks sandbox.
 
-## Recommended next steps
+**Important:** the provided sample data is synthetic OnStar dialogue that doesn't
+contain the four topics, so a real run correctly tags **0** sentences. The demo
+fixture shows tagging working end-to-end. Meaningful results need real transcripts.
 
-1. Load real, de-identified representative data into the POC schema and rerun both tracks.
-2. Compare both tracks against GM's XM Discover control tags per node (precision/recall).
-3. Review the discovered themes with SMEs for emergent topics beyond the four nodes.
-4. Capture cost (DBU + AI token cost) and throughput at target volume; run the rerun-repeatability benchmark.
-5. Swap the sentence-ordering proxy for GM's multi-field ranking logic once provided.
+## Next steps
+
+1. Load real, representative data and rerun all tracks.
+2. Compare the topic tracks against GM's existing tags (accuracy per topic).
+3. Review the AI-discovered themes with the team.
+4. Have people label a set of real examples, then retrain the sentiment model on them.
+5. Measure cost and speed at full volume.
 
 ---
 
-*See `docs/` for the detailed architecture, the lightweight-AI-solution write-up,
-and the validation summary.*
+*See `docs/ARCHITECTURE.md` for detailed diagrams and the per-track write-ups.*

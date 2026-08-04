@@ -70,30 +70,24 @@ def bullet(text):
 
 
 def table(rows):
-    """rows: list of (col1, col2) tuples; first row treated as header."""
-    def cell(txt, bold=False, shade=None):
-        sh = ('<w:shd w:val="clear" w:fill="%s"/>' % shade) if shade else ""
-        return ('<w:tc><w:tcPr><w:tcW w:w="4600" w:type="dxa"/>%s</w:tcPr>%s</w:tc>'
-                % (sh, para_no_p(txt, bold)))
+    """Render (label, description) rows as a definition list.
 
-    def para_no_p(txt, bold):
-        return "<w:p>%s</w:p>" % _runs(txt, bold)
-
-    out = ['<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/>'
-           '<w:tblW w:w="9200" w:type="dxa"/>'
-           '<w:tblBorders>'
-           '<w:top w:val="single" w:sz="4" w:color="CCCCCC"/>'
-           '<w:left w:val="single" w:sz="4" w:color="CCCCCC"/>'
-           '<w:bottom w:val="single" w:sz="4" w:color="CCCCCC"/>'
-           '<w:right w:val="single" w:sz="4" w:color="CCCCCC"/>'
-           '<w:insideH w:val="single" w:sz="4" w:color="CCCCCC"/>'
-           '<w:insideV w:val="single" w:sz="4" w:color="CCCCCC"/>'
-           '</w:tblBorders></w:tblPr>']
+    Hand-authored Word tables need an explicit <w:tblGrid>/fixed layout or Word
+    collapses columns to one character wide. A definition list (bold term +
+    indented description paragraph) renders reliably everywhere and reads well
+    for these label→purpose pairs. The first row is treated as a header and
+    skipped (the surrounding section heading already labels the list).
+    """
+    out = []
     for i, (c1, c2) in enumerate(rows):
-        hdr = (i == 0)
-        shade = "DDE7F5" if hdr else None
-        out.append("<w:tr>%s%s</w:tr>" % (cell(c1, hdr, shade), cell(c2, hdr, shade)))
-    out.append("</w:tbl>")
+        if i == 0:
+            continue  # header row — redundant with the section heading
+        # Bold term.
+        out.append("<w:p><w:pPr><w:spacing w:before=\"80\" w:after=\"0\"/></w:pPr>"
+                    "%s</w:p>" % _runs(c1, bold=True))
+        # Indented description.
+        out.append("<w:p><w:pPr><w:ind w:left=\"360\"/>"
+                   "<w:spacing w:after=\"40\"/></w:pPr>%s</w:p>" % _runs(c2))
     return "".join(out)
 
 

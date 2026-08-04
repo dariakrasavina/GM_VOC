@@ -1,33 +1,30 @@
-# GM VOC POC — Track 3: Trained Transformer Sentiment Model
+# GM VOC POC — Track 3: Trained Sentiment Model
 
-The Qualtrics-faithful **trained ML** track. Qualtrics' own engineering writeup
-([sentiment-analysis-with-text-iq](https://www.qualtrics.com/news/sentiment-analysis-with-text-iq/))
-describes their sentiment system as evolving from a **lexicon + shallow neural
-net** hybrid to a **single transformer-based deep-learning model** emitting
-**5 classes** (Very Positive … Very Negative). This track reproduces exactly that:
-a trained DistilBERT transformer, with a VADER lexicon baseline standing in for
-the older lexicon era.
+The **trained ML** track. It rates each sentence's sentiment on a 5-point scale
+(Very Negative … Very Positive) using a fine-tuned DistilBERT transformer, with a
+simple word-list method (VADER) scored alongside as a baseline.
 
-## Why a single transformer (and explicitly not an ensemble)
+This is a **different job** from Tracks 1 and 2 (which tag topics). Track 3 adds
+"how does the customer feel?" and is meant to be used **alongside** whichever
+topic track GM picks — not compared against them.
 
-Research into Qualtrics/Clarabridge found **no documented use of ensemble models**
-(random forest / boosting / voting / stacking); their disclosed sentiment engine
-is a *single* transformer. Ensembles were also assessed as a poor fit for this
-POC specifically:
+## Why a single transformer (not an ensemble)
 
-- **No labeled data** is the binding constraint — ensembles are a supervised
-  accuracy optimization that presupposes labels.
-- Ensembles **hurt explainability and determinism**, the two things GM values.
-- The accuracy gain over a single fine-tuned transformer is marginal (~1–2 pts).
+We use one trained model, not an ensemble of models, because:
 
-So Track 3 is one transformer, plus a transparent lexicon baseline.
+- **No labeled data** is the real constraint — a bigger ensemble can't help until
+  there are labels to train on.
+- Ensembles are **harder to explain** and less repeatable — the two things GM
+  values most.
+- The accuracy gain over a single good model is small (~1–2 points).
 
-## The label problem — bootstrapped weak supervision
+So Track 3 is one transformer, plus a transparent word-list baseline.
 
-Supervised training needs labels; GM has none yet. Following the literature, we
-**bootstrap weak labels with a zero-shot LLM** (`ai_query`), fine-tune on those,
-and treat the result as a *starting* model to refine once humans adjudicate a
-gold set. This is weak supervision, documented as such — not ground truth.
+## The label problem — bootstrapped labels
+
+Training needs labeled examples, and GM has none yet. So we **bootstrap labels
+with an LLM** (`ai_query`), train on those, and treat the result as a *starting*
+model to refine once people review real data. It is not ground truth.
 
 ## Pipeline
 
@@ -50,7 +47,7 @@ score_sentiment.py
 | File | Role |
 |------|------|
 | `train_sentiment_model.py` | Weak-label + fine-tune DistilBERT + MLflow log/register. |
-| `vader_baseline.py` | Lexicon (VADER) 5-class baseline — the pre-transformer era; runs locally, no GPU. |
+| `vader_baseline.py` | Simple word-list (VADER) 5-class baseline for comparison; runs locally, no GPU. |
 | `score_sentiment.py` | Batch-score with the registered transformer + VADER; write comparison table. |
 | `run_train_sentiment_notebook.py` / `run_score_sentiment_notebook.py` | Databricks entrypoints (install libs, call the job). |
 

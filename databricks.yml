@@ -57,7 +57,7 @@ resources:
               date_start: "2025-07-01"
               date_end: "2026-06-30"
               ai_version: "2.1"
-              sample_limit: "5000"
+              sample_limit: "200"
 
         - task_key: topic_discovery
           notebook_task:
@@ -71,7 +71,7 @@ resources:
               embedding_endpoint: databricks-gte-large-en
               gen_endpoint: databricks-meta-llama-3-3-70b-instruct
               num_clusters: "12"
-              sample_limit: "3000"
+              sample_limit: "200"
 
         # Compare AI vs rules; needs the AI tags (this run) and the rule tags
         # (produced by voc_topic_model_job). Run the rule job first.
@@ -84,5 +84,46 @@ resources:
               rule_tags_table: daria_krasavina.gm_voc.voc_topic_tags
               ai_tags_table: daria_krasavina.gm_voc.voc_ai_topic_tags
               comparison_table: daria_krasavina.gm_voc.voc_approach_comparison
+      queue:
+        enabled: true
+
+    # ----------------------------------------------------------------------
+    # Track 3 — trained transformer sentiment model (Qualtrics-faithful).
+    # train: weak-label via LLM -> fine-tune DistilBERT -> log/register in MLflow.
+    # score: apply the registered model + VADER lexicon baseline.
+    # Requires Databricks Runtime for ML (GPU recommended for training).
+    # ----------------------------------------------------------------------
+    voc_sentiment_model_job:
+      name: "[${bundle.target}] GM VOC Sentiment Model (train + score)"
+      tasks:
+        - task_key: train_sentiment
+          notebook_task:
+            notebook_path: ./sentiment_model/run_train_sentiment_notebook.py
+            base_parameters:
+              sentence_table: daria_krasavina.gm_voc.qualtrics_audio_transcripts_sentence_level_sample_data
+              date_start: "2025-07-01"
+              date_end: "2026-06-30"
+              label_endpoint: databricks-meta-llama-3-3-70b-instruct
+              sample_limit: "300"
+              base_model: distilbert-base-uncased
+              num_train_epochs: "3"
+              batch_size: "16"
+              experiment_path: /Shared/gm_voc_sentiment
+              registered_model: daria_krasavina.gm_voc.voc_sentiment_transformer
+              weak_labels_table: daria_krasavina.gm_voc.voc_sentiment_weak_labels
+
+        - task_key: score_sentiment
+          depends_on:
+            - task_key: train_sentiment
+          notebook_task:
+            notebook_path: ./sentiment_model/run_score_sentiment_notebook.py
+            base_parameters:
+              sentence_table: daria_krasavina.gm_voc.qualtrics_audio_transcripts_sentence_level_sample_data
+              scored_table: daria_krasavina.gm_voc.voc_sentiment_scored
+              registered_model: daria_krasavina.gm_voc.voc_sentiment_transformer
+              model_alias: champion
+              date_start: "2025-07-01"
+              date_end: "2026-06-30"
+              sample_limit: "300"
       queue:
         enabled: true

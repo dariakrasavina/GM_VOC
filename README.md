@@ -3,17 +3,22 @@
 Proof of concept evaluating whether **Databricks** can replicate — and improve on —
 GM's **Qualtrics XM Discover** topic tagging over contact-center call transcripts.
 
-It classifies call transcripts by topic at **sentence grain**, using two
-complementary tracks:
+It analyzes call transcripts at **sentence grain**, using three complementary
+tracks — mirroring the blend Qualtrics actually documents (rules + LLM + a
+trained transformer):
 
 1. **Rule engine** — a deterministic re-implementation of GM's XM Discover
    swim-lane rules (the control replica).
 2. **Lightweight AI-powered solution** — Databricks' native AI functions
    (`ai_classify`, `ai_analyze_sentiment`, `ai_query` embeddings + KMeans,
    `ai_gen`) — no custom model to train, host, or maintain.
+3. **Trained transformer sentiment model** — a fine-tuned DistilBERT emitting
+   5-class sentiment (Very Positive … Very Negative), MLflow-tracked and
+   registered in Unity Catalog, with a VADER lexicon baseline. This mirrors
+   Qualtrics' documented lexicon→transformer evolution.
 
-Both write per-sentence topic tags so results can be validated 1:1 against GM's
-current Qualtrics output.
+Tracks 1–2 write per-sentence topic tags (validated against GM's Qualtrics
+output); Track 3 adds owned, servable sentiment.
 
 ---
 
@@ -38,14 +43,15 @@ and strips IVR/boilerplate before any topic is applied.
 |-------|----------|-----------|-----------|
 | **1** | Rule engine | Faithful XM Discover swim-lane replica (OR/AND/NOT, phrases, wildcards, fuzzy, proximity). Deterministic, explainable, zero model cost, exact control replica. | Manual rule upkeep; misses novel phrasing. |
 | **2a** | AI classification | `ai_classify` (a hosted LLM) assigns each sentence to a topic, steered by the topic's business definition; `ai_analyze_sentiment` adds sentiment. | Non-deterministic; per-call cost. |
-| **2b** | Topic discovery | Unsupervised: `ai_query` embeds sentences, **Spark MLlib KMeans** clusters by meaning, `ai_gen` auto-names themes — finds themes nobody defined. | Clusters need human interpretation. |
+| **2b** | Topic discovery | Unsupervised: `ai_query` embeds sentences, KMeans clusters by meaning, `ai_gen` auto-names themes — finds themes nobody defined. | Clusters need human interpretation. |
+| **3** | Trained transformer sentiment | Fine-tuned DistilBERT for 5-class sentiment, weak-labeled via LLM, MLflow-tracked + UC-registered; VADER lexicon baseline. Owned, servable, zero token cost at inference. | Needs labels (bootstrapped); GPU to train. |
 | — | Comparison | Agreement analysis: rules vs. AI per topic (overlap, precision/recall/F1). | Uses rules as *proxy* control, not GM's true XM Discover output. |
 
-Track 2 is a **lightweight AI-powered solution**, not a custom-trained model:
-the AI functions call hosted models, so GM does not own long-term model
-maintenance. (Note: the KMeans discovery step *does* train a real model; a
-custom **supervised** classifier is intentionally out of scope and could be a
-later track.)
+Track 2 is a **lightweight AI-powered solution** (hosted models, no upkeep).
+Track 3 is the **custom trained ML** track — the one Qualtrics technique they
+explicitly disclose (a single transformer, *not* an ensemble; research found no
+evidence Qualtrics uses ensembles, and they're a poor fit here given no labels
+and the need for determinism/explainability). See `docs/SENTIMENT_MODEL.md`.
 
 ---
 
@@ -58,12 +64,15 @@ gm_voc/
 │                    test_rule_engine.py
 ├── ai_solution/     Track 2 — ai_classify_job.py, topic_discovery_job.py,
 │                    compare_approaches_job.py + 3 run_*_notebook.py entrypoints
+├── sentiment_model/ Track 3 — train_sentiment_model.py, vader_baseline.py,
+│                    score_sentiment.py + 2 run_*_notebook.py entrypoints
 ├── shared/          rules.json (topic rules as data) + build_rules_config.py +
-│                    make_demo_fixture.py — used by both tracks
+│                    make_demo_fixture.py — used by the topic tracks
 ├── docs/            README, ARCHITECTURE, LIGHTWEIGHT_AI_SOLUTION,
-│                    VALIDATION_SUMMARY, architecture_diagram.html
+│                    SENTIMENT_MODEL, VALIDATION_SUMMARY, architecture_diagram.html
 ├── test_data/       sample + demo CSVs
-└── databricks.yml   Asset Bundle: voc_topic_model_job + voc_ai_pipeline_job
+└── databricks.yml   Asset Bundle: voc_topic_model_job + voc_ai_pipeline_job +
+                     voc_sentiment_model_job
 ```
 
 `rule_engine.py` and `tagger.py` **never import pyspark**, which is exactly why
@@ -211,7 +220,41 @@ sequenceDiagram
     W-->>U: done
 ```
 
-> A rendered HTML version of these diagrams is in `docs/architecture_diagram.html`.
+### 4. Runtime execution order — trained sentiment model (`voc_sentiment_model_job`)
+
+```mermaid
+sequenceDiagram
+    participant U as You (CLI)
+    participant W as Databricks (DBR ML + GPU)
+    participant AI as LLM (ai_query, weak labeling)
+    participant HF as HuggingFace Trainer (DistilBERT)
+    participant ML as MLflow / Unity Catalog
+    participant UC as Unity Catalog (Delta)
+
+    U->>W: databricks bundle run voc_sentiment_model_job
+
+    rect rgb(235,244,255)
+    Note over W,UC: Task A — train_sentiment_model
+    W->>UC: scope + sample verbatims
+    W->>AI: ai_query weak-label 5-class sentiment
+    AI-->>W: Very Neg .. Very Pos labels
+    W->>UC: write voc_sentiment_weak_labels (audit)
+    W->>HF: fine-tune DistilBERT on weak labels
+    HF-->>W: model + accuracy / macro-F1
+    W->>ML: log params/metrics/model, register in UC
+    end
+
+    rect rgb(238,247,238)
+    Note over W,UC: Task B — score_sentiment
+    W->>ML: load registered transformer
+    W->>W: score verbatims (transformer) + VADER lexicon baseline
+    W->>UC: write voc_sentiment_scored (both methods per sentence)
+    end
+    W-->>U: done
+```
+
+> A rendered HTML version of the topic-track diagrams is in
+> `docs/architecture_diagram.html`. Full Mermaid source: `docs/ARCHITECTURE.md`.
 
 ---
 
@@ -247,6 +290,9 @@ databricks bundle run voc_topic_model_job -t sandbox -p <profile>
 
 # Track 2 (AI classify + discovery + compare)
 databricks bundle run voc_ai_pipeline_job -t sandbox -p <profile>
+
+# Track 3 (train transformer sentiment model + score) — needs DBR ML / GPU
+databricks bundle run voc_sentiment_model_job -t sandbox -p <profile>
 ```
 
 Table names and date range are job parameters in `databricks.yml`. The AI track
@@ -266,6 +312,9 @@ bounded `sample_limit`).
 | `voc_discovered_themes` | discovery | emergent themes with names/summaries |
 | `voc_theme_assignments` | discovery | sentence → theme_id |
 | `voc_approach_comparison` | compare | rules-vs-AI agreement per topic |
+| `voc_sentiment_weak_labels` | sentiment train | verbatim + LLM weak label (audit) |
+| `voc_sentiment_transformer` (UC model) | sentiment train | registered fine-tuned DistilBERT |
+| `voc_sentiment_scored` | sentiment score | transformer + VADER sentiment per sentence |
 
 ---
 

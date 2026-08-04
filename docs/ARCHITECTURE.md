@@ -1,9 +1,10 @@
 # GM VOC POC — Architecture (Mermaid)
 
-Databricks topic-model replication of Qualtrics XM Discover, with two
-classification tracks: a deterministic **rule engine** and a **lightweight
-AI-powered solution** built on Databricks AI functions (`ai_classify`,
-`ai_analyze_sentiment`, `ai_query` embeddings + KMeans, `ai_gen`).
+Databricks replication of Qualtrics XM Discover, with three tracks: a
+deterministic **rule engine**, a **lightweight AI-powered solution** built on
+Databricks AI functions (`ai_classify`, `ai_analyze_sentiment`, `ai_query`
+embeddings + KMeans, `ai_gen`), and a **trained transformer sentiment model**
+(fine-tuned DistilBERT, 5-class, MLflow-tracked + VADER baseline).
 
 These diagrams render natively on GitHub and in any Mermaid viewer
 (e.g. https://mermaid.live). An HTML version is in `architecture_diagram.html`.
@@ -142,6 +143,41 @@ sequenceDiagram
 
 ---
 
+## 4. Runtime execution order — trained sentiment model (`voc_sentiment_model_job`)
+
+```mermaid
+sequenceDiagram
+    participant U as You (CLI)
+    participant W as Databricks (DBR ML + GPU)
+    participant AI as LLM (ai_query, weak labeling)
+    participant HF as HuggingFace Trainer (DistilBERT)
+    participant ML as MLflow / Unity Catalog
+    participant UC as Unity Catalog (Delta)
+
+    U->>W: databricks bundle run voc_sentiment_model_job
+
+    rect rgb(235,244,255)
+    Note over W,UC: Task A — train_sentiment_model
+    W->>UC: scope + sample verbatims
+    W->>AI: ai_query weak-label 5-class sentiment
+    AI-->>W: Very Neg .. Very Pos labels
+    W->>UC: write voc_sentiment_weak_labels (audit)
+    W->>HF: fine-tune DistilBERT on weak labels
+    HF-->>W: model + accuracy / macro-F1
+    W->>ML: log params/metrics/model, register in UC
+    end
+
+    rect rgb(238,247,238)
+    Note over W,UC: Task B — score_sentiment
+    W->>ML: load registered transformer
+    W->>W: score verbatims (transformer) + VADER lexicon baseline
+    W->>UC: write voc_sentiment_scored (both methods per sentence)
+    end
+    W-->>U: done
+```
+
+---
+
 ## Reading it
 
 - **Build time:** the client Excel drives `rules.json`; the engine
@@ -156,3 +192,9 @@ sequenceDiagram
   themes (embeddings + KMeans + `ai_gen`) — no model to train or maintain. The
   compare job regresses AI against the rule control. Requires serverless compute
   + DBR 18.2+; AI calls are pay-per-token.
+- **Track 3 (trained transformer sentiment):** weak-label 5-class sentiment with
+  an LLM, fine-tune DistilBERT, and register it in MLflow / Unity Catalog — a
+  model GM owns and serves at zero token cost. A VADER lexicon baseline mirrors
+  the pre-transformer era. Requires DBR ML (GPU to train). See
+  `SENTIMENT_MODEL.md`. This is the Qualtrics-faithful *trained* ML track — a
+  single transformer, not an ensemble.

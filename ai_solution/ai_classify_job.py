@@ -46,7 +46,8 @@ DEFAULTS = {
     # ai_classify options; version pinned for deterministic behavior.
     "ai_version": "2.1",
     # Cap rows for a cost-bounded POC run; set to 0 for the full corpus.
-    "sample_limit": "5000",
+    # Keep this small for smoke tests — each row is a paid LLM call.
+    "sample_limit": "200",
 }
 
 JOIN_KEY = "natural_id"
@@ -110,7 +111,11 @@ def build_label_map(rules_path=None):
     labels = {}
     for node in rules["nodes"]:
         if node.get("comparison_target"):
-            desc = (node.get("description") or node["name"]).strip()
+            desc = (node.get("description") or node["name"])
+            # Collapse newlines/tabs/repeated spaces to single spaces. The raw
+            # workbook descriptions contain newlines, which corrupt the JSON
+            # string ai_classify parses internally (AI_FUNCTION_COMPILATION_ERROR).
+            desc = " ".join(desc.split())
             # Trim overly long definitions to keep the prompt lean.
             labels[node["name"]] = desc[:900]
     labels[NONE_LABEL] = (
@@ -121,6 +126,7 @@ def build_label_map(rules_path=None):
 
 def run():
     from pyspark.sql import SparkSession
+    from pyspark.sql import functions as F
 
     spark = SparkSession.builder.appName("gm_voc_ai_classify").getOrCreate()
     params = get_params()
@@ -128,8 +134,6 @@ def run():
 
     label_map = build_label_map()
     labels_json = json.dumps(label_map, ensure_ascii=False)
-    # SQL-escape single quotes for embedding inside the query string.
-    labels_sql = labels_json.replace("'", "''")
 
     limit = int(params.get("sample_limit") or 0)
     limit_clause = ("LIMIT %d" % limit) if limit > 0 else ""
@@ -150,51 +154,30 @@ def run():
     """.format(jk=JOIN_KEY, text=TEXT_FIELD, sent=params["sentence_table"],
                ds=params["date_start"], de=params["date_end"], limit=limit_clause)
 
-    # ai_classify returns the best label; ai_analyze_sentiment adds sentiment.
-    # options map pins the function version and requests confidence scores.
-    classify_sql = """
-        SELECT
-            natural_id, id_document, id_verbatim, document_date, words,
-            ai_classify(
-                words,
-                '{labels}',
-                map('version', '{ver}', 'enableConfidenceScores', 'true')
-            ) AS ai_raw,
-            ai_analyze_sentiment(words) AS sentiment
-        FROM scoped
-    """.format(labels=labels_sql, ver=params["ai_version"])
+    scoped = spark.sql(scoped_sql)
 
-    spark.sql(scoped_sql).createOrReplaceTempView("scoped")
-    classified = spark.sql(classify_sql)
-    classified.createOrReplaceTempView("classified")
+    # This runtime's ai_classify wants `labels` as a STRING (a JSON array of
+    # label names), not an ARRAY column ("labels requires STRING, but got ARRAY").
+    # Pass the JSON via F.lit() so PySpark handles escaping — the topic names are
+    # short and contain no newlines, so the JSON stays valid. ai_classify returns
+    # the chosen label as a plain STRING (no struct to parse). ai_analyze_sentiment
+    # adds sentiment (positive/negative/neutral/mixed).
+    label_names = list(label_map.keys())
+    labels_json = json.dumps(label_names, ensure_ascii=False)
 
-    # ai_classify v2.x returns a struct/variant; extract the top label + score
-    # defensively so this works whether ai_raw is a plain string (v1) or a
-    # struct with response[0].{value,confidence_score} (v2.x).
-    extract_sql = """
-        SELECT
-            natural_id, id_document, id_verbatim, document_date, words,
-            sentiment,
-            CASE
-              WHEN typeof(ai_raw) = 'string' THEN CAST(ai_raw AS STRING)
-              ELSE CAST(try_element_at(ai_raw:response, 1):value AS STRING)
-            END AS ai_topic,
-            CASE
-              WHEN typeof(ai_raw) = 'string' THEN NULL
-              ELSE CAST(try_element_at(ai_raw:response, 1):confidence_score AS DOUBLE)
-            END AS ai_confidence
-        FROM classified
-    """
-    try:
-        result = spark.sql(extract_sql)
-        result.write.mode("overwrite").format("delta") \
-            .option("overwriteSchema", "true").saveAsTable(params["ai_tags_table"])
-    except Exception as e:
-        # Fallback: some runtimes return ai_classify as a plain string. Persist
-        # the raw output so nothing is lost, and surface the parse issue.
-        print("Struct extraction failed (%s); writing raw output instead." % e)
-        classified.write.mode("overwrite").format("delta") \
-            .option("overwriteSchema", "true").saveAsTable(params["ai_tags_table"])
+    # ai_classify returns a VARIANT on this runtime; cast to STRING so the column
+    # is orderable/groupable and stores cleanly for the comparison job
+    # (VARIANT can't be used in GROUP BY -> GROUP_EXPRESSION_TYPE_IS_NOT_ORDERABLE).
+    result = (scoped
+        .withColumn("_labels", F.lit(labels_json))
+        .withColumn("ai_topic", F.expr("CAST(ai_classify(words, _labels) AS STRING)"))
+        .withColumn("sentiment", F.expr("CAST(ai_analyze_sentiment(words) AS STRING)"))
+        .drop("_labels")
+        .select("natural_id", "id_document", "id_verbatim", "document_date",
+                "words", "ai_topic", "sentiment"))
+
+    result.write.mode("overwrite").format("delta") \
+        .option("overwriteSchema", "true").saveAsTable(params["ai_tags_table"])
 
     print("Wrote %s" % params["ai_tags_table"])
     spark.sql("""

@@ -109,13 +109,14 @@ def build_body():
 
     b.append(para("1. What it is", style="Heading1"))
     b.append(para(
-        "A system that classifies GM contact-center call transcripts by topic on "
-        "Databricks, using two complementary tracks: (1) a deterministic rule "
-        "engine that faithfully replicates GM's Qualtrics XM Discover logic, and "
-        "(2) a lightweight AI-powered solution built on Databricks' native AI "
-        "functions (ai_classify, ai_analyze_sentiment, ai_query embeddings, ai_gen). "
-        "Both operate at sentence grain so results can be validated against the "
-        "current Qualtrics control set."))
+        "A system that analyzes GM contact-center call transcripts at sentence "
+        "grain on Databricks, using three complementary tracks — mirroring the "
+        "blend Qualtrics actually documents (rules + LLM + a trained transformer): "
+        "(1) a deterministic rule engine that faithfully replicates GM's Qualtrics "
+        "XM Discover logic; (2) a lightweight AI-powered solution built on "
+        "Databricks' native AI functions (ai_classify, ai_analyze_sentiment, "
+        "ai_query embeddings, ai_gen); and (3) a trained transformer sentiment "
+        "model (fine-tuned DistilBERT, 5-class, MLflow-tracked + VADER baseline)."))
     b.append(para(
         "Track 1 design decision: the matching logic is pure Python with zero "
         "dependencies, so the exact same code runs inside a Spark job at scale "
@@ -126,6 +127,14 @@ def build_body():
         "nothing to train, host, or retrain, so GM does not own long-term model "
         "maintenance. The rule engine remains the deterministic control the AI "
         "solution is regressed against."))
+    b.append(para(
+        "Track 3 rationale: the one Qualtrics technique they explicitly disclose "
+        "is a single transformer sentiment model (their engineering blog describes "
+        "evolving from a lexicon + shallow-net hybrid to a transformer, 5-class). "
+        "Research found no evidence Qualtrics uses ensemble models, and ensembles "
+        "are a poor fit here (no labels; hurts determinism/explainability), so "
+        "Track 3 is a single fine-tuned transformer — a model GM owns and serves "
+        "at zero token cost — with a VADER lexicon baseline for the older era."))
 
     b.append(para("2. The four topics it tags", style="Heading1"))
     b.append(para("From two branches of GM's APM hierarchy:"))
@@ -134,34 +143,39 @@ def build_body():
     b.append(bullet("Loyalty → Rewards → Points"))
     b.append(bullet("Loyalty → Rewards → Points → Redeem"))
 
-    b.append(para("3. The three classification approaches", style="Heading1"))
+    b.append(para("3. The three tracks", style="Heading1"))
     b.append(para(
         "The POC evaluates whether Databricks can replicate and improve on GM's "
-        "XM Discover tagging, so three methods were built, from most "
-        "deterministic to most ML, plus a job that compares them."))
+        "XM Discover tagging, so three tracks were built, from most deterministic "
+        "to trained ML, plus a job that compares tracks 1 and 2."))
     b.append(table([
-        ("Approach", "What it is / trade-offs"),
+        ("Track", "What it is / trade-offs"),
         ("1. Rule engine  (rule_engine.py, tagger.py, voc_topic_model_job.py)",
          "Faithful re-implementation of GM's XM Discover swim-lane rules. "
          "Deterministic, explainable, zero model cost, exact control replica. "
          "Trade-off: manual rule upkeep; misses novel phrasing."),
-        ("2. AI classification  (ai_classify_job.py)",
+        ("2a. AI classification  (ai_classify_job.py)",
          "An LLM assigns each sentence to a topic via ai_classify, steered by "
          "the topic's business definition; ai_analyze_sentiment adds sentiment. "
          "No keyword maintenance; handles paraphrase. Trade-off: "
          "non-deterministic; per-call cost."),
-        ("3. Topic discovery  (topic_discovery_job.py)",
-         "Unsupervised: ai_query embeds sentences, Spark MLlib KMeans clusters "
-         "them by meaning, ai_gen auto-names themes. Finds themes nobody defined "
-         "(the “global other” problem). Trade-off: clusters need interpretation."),
+        ("2b. Topic discovery  (topic_discovery_job.py)",
+         "Unsupervised: ai_query embeds sentences, KMeans (scikit-learn, "
+         "serverless-safe) clusters them by meaning, ai_gen auto-names themes. "
+         "Finds themes nobody defined. Trade-off: clusters need interpretation."),
+        ("3. Trained transformer sentiment  (train_sentiment_model.py)",
+         "Fine-tuned DistilBERT for 5-class sentiment; weak-labeled via LLM, "
+         "MLflow-tracked and registered in Unity Catalog; VADER lexicon baseline. "
+         "Owned, servable, zero token cost at inference. Trade-off: needs labels "
+         "(bootstrapped); GPU to train well. A single transformer, not an ensemble."),
         ("Comparison  (compare_approaches_job.py)",
          "Agreement analysis: rules vs. AI per topic (overlap, rule-only, "
          "AI-only, precision/recall/F1). The regression-vs-control deliverable."),
     ]))
     b.append(para(
         "The AI classifier reads its topic definitions from the same rules.json "
-        "the rule engine uses, so both tracks classify against identical topics.",
-        bold=True))
+        "the rule engine uses, so both topic tracks classify against identical "
+        "topics.", bold=True))
 
     b.append(para("4. Files — rule engine (Track 1)", style="Heading1"))
     b.append(table([
@@ -209,9 +223,9 @@ def build_body():
          "and ai_analyze_sentiment. Writes voc_ai_topic_tags."),
         ("topic_discovery_job.py",
          "Unsupervised topic discovery. Embeds sentences via "
-         "ai_query('databricks-gte-large-en'), clusters with Spark MLlib KMeans, "
-         "auto-names themes with ai_gen. Writes voc_discovered_themes + "
-         "voc_theme_assignments."),
+         "ai_query('databricks-gte-large-en'), clusters with scikit-learn KMeans "
+         "(serverless-safe), auto-names themes with ai_gen. Writes "
+         "voc_discovered_themes + voc_theme_assignments."),
         ("compare_approaches_job.py",
          "Agreement analysis between the rule tags and AI tags per topic; "
          "precision/recall/F1 with the rule engine as proxy control. "
@@ -224,7 +238,27 @@ def build_body():
          "cost notes, output tables, and caveats to verify on first real run."),
     ]))
 
-    b.append(para("7. Files — outputs & validation", style="Heading1"))
+    b.append(para("7. Files — trained sentiment model (Track 3)", style="Heading1"))
+    b.append(table([
+        ("File", "Purpose"),
+        ("train_sentiment_model.py",
+         "Weak-labels 5-class sentiment via an LLM (ai_query), fine-tunes "
+         "DistilBERT (HuggingFace Trainer), logs metrics/model to MLflow and "
+         "registers it in Unity Catalog. Skips + logs a stub if data is too thin."),
+        ("vader_baseline.py",
+         "VADER lexicon 5-class sentiment baseline — the pre-transformer era; "
+         "runs locally with no GPU, for a transparent comparison point."),
+        ("score_sentiment.py",
+         "Batch-scores verbatims with the registered transformer + the VADER "
+         "baseline; writes voc_sentiment_scored (both methods per sentence)."),
+        ("run_train_sentiment_notebook.py / run_score_sentiment_notebook.py",
+         "Databricks entrypoints (pip-install torch/transformers/etc, call the job)."),
+        ("SENTIMENT_MODEL.md",
+         "Documents the trained-model rationale (single transformer, not an "
+         "ensemble), the weak-label bootstrap, requirements, and caveats."),
+    ]))
+
+    b.append(para("8. Files — outputs & validation", style="Heading1"))
     b.append(table([
         ("File", "Purpose"),
         ("build_dashboard.py",
@@ -238,26 +272,29 @@ def build_body():
          "topical content to tag."),
     ]))
 
-    b.append(para("8. Files — deployment & docs", style="Heading1"))
+    b.append(para("9. Files — deployment & docs", style="Heading1"))
     b.append(table([
         ("File", "Purpose"),
         ("databricks.yml",
-         "Databricks Asset Bundle — defines two jobs (voc_topic_model_job for "
-         "rules; voc_ai_pipeline_job for AI classify + discovery + compare) as "
-         "serverless tasks. Deployed to the daria_k_sandbox workspace."),
-        ("README.md", "How everything fits together and how to run it."),
-        ("LIGHTWEIGHT_AI_SOLUTION.md", "The lightweight AI-powered solution and three-approach comparison."),
+         "Databricks Asset Bundle — defines three jobs (voc_topic_model_job for "
+         "rules; voc_ai_pipeline_job for AI classify + discovery + compare; "
+         "voc_sentiment_model_job for train + score) as serverless tasks. "
+         "Deployed to the daria_k_sandbox workspace."),
+        ("README.md", "How everything fits together and how to run it (with diagrams)."),
+        ("ARCHITECTURE.md", "All Mermaid diagrams: component map + per-track runtime flows."),
+        ("LIGHTWEIGHT_AI_SOLUTION.md", "Track 2 details and the three-approach comparison."),
+        ("SENTIMENT_MODEL.md", "Track 3 details: trained transformer + VADER baseline."),
         ("VALIDATION_SUMMARY.md",
          "POC deliverable: what was built, what the data showed, and "
          "strengths / gaps / recommendations."),
         ("architecture_diagram.html",
-         "Rendered component map + runtime flow diagrams for both tracks."),
+         "Rendered component map + runtime flow diagrams."),
         (".gitignore",
          "Keeps generated outputs, the venv, and the client requirements docs "
          "out of git."),
     ]))
 
-    b.append(para("9. Key findings", style="Heading1"))
+    b.append(para("10. Key findings", style="Heading1"))
     b.append(bullet(
         "The provided sample data is synthetic (OnStar roadside dialogue, ~40 "
         "distinct sentences, zero topic vocabulary), so a real run correctly "
@@ -272,24 +309,31 @@ def build_body():
         "the sample). The global scope filter passes ~43% of the sample "
         "(English + audio + customer-side)."))
     b.append(bullet(
-        "ML-track caveats to verify on first real run: the ai_classify v2.x "
-        "return shape (struct vs. string) and the embedding return format are "
-        "runtime-sensitive (handled defensively in code), and the AI functions "
-        "require serverless compute + DBR 18.2+ and are pay-per-token."))
+        "Track caveats verified/found on real Databricks runs: ai_classify's "
+        "signature is runtime-specific — labels must be a JSON string and the "
+        "output is a VARIANT (cast to STRING); topic discovery uses scikit-learn "
+        "KMeans because serverless forbids Spark MLlib persistence; the sentiment "
+        "job must pip-install torch on serverless (no GPU there)."))
+    b.append(bullet(
+        "Track 3 on synthetic data: the LLM successfully weak-labeled the sample "
+        "but sentiment collapses to one class (flat OnStar dialogue), so training "
+        "correctly logs a skip stub. Real verbatims are needed to train for real."))
 
-    b.append(para("10. Status", style="Heading1"))
+    b.append(para("11. Status", style="Heading1"))
     b.append(bullet("Track 1 (rules): built, tested (33/33), validated end-to-end locally."))
-    b.append(bullet("Track 2 (lightweight AI-powered solution): ai_classify, topic-discovery, and comparison jobs built and compile; wired into the bundle."))
-    b.append(bullet("Both jobs deployed to Databricks (daria_k_sandbox) as an Asset Bundle."))
+    b.append(bullet("Track 2 (lightweight AI-powered solution): ai_classify runs and writes tags on Databricks; topic-discovery + compare wired in."))
+    b.append(bullet("Track 3 (trained transformer sentiment): weak-labeling runs on Databricks; train/score jobs wired in; VADER baseline runs locally."))
+    b.append(bullet("All three jobs deployed to Databricks (daria_k_sandbox) as an Asset Bundle."))
     b.append(bullet("Client requirement docs scrubbed from git history; repo made private."))
-    b.append(bullet("Pending: run the ML pipeline against real input tables (needs the daria_krasavina.gm_voc tables loaded)."))
+    b.append(bullet("Pending: run all tracks against real, representative input data."))
 
-    b.append(para("11. Recommended next steps", style="Heading1"))
-    b.append(bullet("Load real, de-identified representative data into the POC schema and rerun both tracks."))
-    b.append(bullet("Compare AI classifier and rule engine against GM's XM Discover control tags per node (precision/recall)."))
+    b.append(para("12. Recommended next steps", style="Heading1"))
+    b.append(bullet("Load real, de-identified representative data into the POC schema and rerun all three tracks."))
+    b.append(bullet("Compare the AI classifier and rule engine against GM's XM Discover control tags per node (precision/recall)."))
     b.append(bullet("Review the discovered themes with SMEs to identify emergent topics beyond the four defined nodes."))
+    b.append(bullet("Adjudicate a human-labeled gold set, then retrain the Track 3 transformer on real labels (beyond LLM weak labels)."))
     b.append(bullet("Capture cost (DBU + AI-function token cost) and throughput at target volume; run the rerun repeatability benchmark."))
-    b.append(bullet("Swap the sentence-ordering proxy for Andrew's multi-field ranking logic once provided."))
+    b.append(bullet("Swap the sentence-ordering proxy for GM's multi-field ranking logic once provided."))
 
     return "".join(b)
 

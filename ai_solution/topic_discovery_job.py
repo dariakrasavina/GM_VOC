@@ -9,7 +9,8 @@ Pipeline (all on Databricks):
   1. Scope to in-scope customer verbatims (English + audio + customer-side).
   2. Embed each sentence with a Databricks foundation embedding model via
      ai_query('databricks-gte-large-en', ...)  -> dense vector.
-  3. Cluster the embeddings with Spark MLlib KMeans  -> emergent themes.
+  3. Cluster the embeddings with KMeans (scikit-learn on the driver over the
+     bounded sample) -> emergent themes.
   4. Auto-name each cluster with ai_gen over its representative verbatims.
 
 This is genuine ML: sentences are grouped by *semantic similarity*, not
@@ -18,8 +19,15 @@ The output is a set of discovered themes with sizes, sample verbatims, and
 LLM-generated names/summaries — feeding the "global other" review GM does today
 by hand.
 
+CLUSTERING NOTE: serverless compute forbids RDD/DataFrame persistence, which
+Spark MLlib KMeans needs internally. Since discovery runs on a bounded sample
+(sample_limit), we collect embeddings to the driver and cluster with
+scikit-learn. For a very large corpus on classic (non-serverless) compute, swap
+the sklearn block for pyspark.ml.clustering.KMeans.
+
 REQUIREMENTS: serverless compute, DBR 18.2+, Model-Serving-supported region,
-Spark MLlib (built in). Embedding calls are pay-per-token — use sample_limit.
+numpy + scikit-learn (bundled in Databricks runtimes). Embedding calls are
+pay-per-token — use sample_limit.
 """
 import os
 import sys
@@ -69,9 +77,6 @@ def get_params():
 def run():
     from pyspark.sql import SparkSession
     from pyspark.sql import functions as F
-    from pyspark.ml.feature import VectorAssembler
-    from pyspark.ml.clustering import KMeans
-    from pyspark.ml.functions import array_to_vector
 
     spark = SparkSession.builder.appName("gm_voc_topic_discovery").getOrCreate()
     params = get_params()
@@ -107,14 +112,32 @@ def run():
     #                 F.expr("from_json(raw, 'struct<data:array<struct<embedding:array<double>>>>').data[0].embedding"))
 
     embedded = embedded.filter(F.col("embedding").isNotNull())
-    embedded = embedded.withColumn("features", array_to_vector("embedding"))
-    embedded.cache()
 
-    # 3. Cluster.
-    kmeans = KMeans(k=k, seed=42, featuresCol="features", predictionCol="theme_id")
-    model = kmeans.fit(embedded)
-    assigned = model.transform(embedded).select(
-        "natural_id", "id_document", "id_verbatim", "words", "theme_id")
+    # 3. Cluster. Serverless compute forbids RDD/DataFrame persistence, which
+    #    Spark MLlib KMeans requires internally (NOT_SUPPORTED_WITH_SERVERLESS:
+    #    PERSIST TABLE). Because discovery runs on a bounded sample (sample_limit),
+    #    we collect the embeddings to the driver and cluster with scikit-learn —
+    #    serverless-safe and identical output shape. For very large corpora on
+    #    classic (non-serverless) compute, swap this for pyspark.ml KMeans.
+    import numpy as np
+    from sklearn.cluster import KMeans as SKKMeans
+
+    rows = embedded.select("natural_id", "id_document", "id_verbatim",
+                           "words", "embedding").collect()
+    if not rows:
+        print("No embedded rows; nothing to cluster.")
+        return
+    X = np.array([r["embedding"] for r in rows], dtype="float64")
+    k_eff = min(k, len(rows))  # can't have more clusters than points
+    labels = SKKMeans(n_clusters=k_eff, random_state=42, n_init=10).fit_predict(X)
+
+    assigned_rows = [
+        (r["natural_id"], r["id_document"], r["id_verbatim"], r["words"],
+         int(labels[i]))
+        for i, r in enumerate(rows)]
+    assigned = spark.createDataFrame(
+        assigned_rows,
+        ["natural_id", "id_document", "id_verbatim", "words", "theme_id"])
     assigned.write.mode("overwrite").format("delta") \
         .option("overwriteSchema", "true").saveAsTable(params["assignments_table"])
 
@@ -124,16 +147,19 @@ def run():
             .agg(F.count("*").alias("size"),
                  F.slice(F.collect_list("words"), 1, 8).alias("examples")))
     reps = reps.withColumn(
-        "examples_text", F.concat_ws("\n- ", F.col("examples")))
+        "examples_text", F.concat_ws("; ", F.col("examples")))
     name_prompt = (
         "You are analyzing customer service call transcripts. Below are example "
         "customer sentences from one cluster. Respond with a JSON object with "
-        "two keys: \"name\" (a 2-5 word theme label) and \"summary\" (one "
-        "sentence describing the theme). Sentences:\n- "
-    )
-    themes = reps.withColumn(
-        "ai_named",
-        F.expr("ai_gen(concat('%s', examples_text))" % name_prompt.replace("'", "''")))
+        'two keys: "name" (a 2-5 word theme label) and "summary" (one '
+        "sentence describing the theme). Sentences: ")
+    # Build the ai_gen input by concatenating a lit prompt column with the
+    # examples column, so the prompt text (quotes, punctuation) never touches
+    # SQL parsing.
+    themes = (reps
+        .withColumn("_prompt", F.lit(name_prompt))
+        .withColumn("ai_named", F.expr("ai_gen(concat(_prompt, examples_text))"))
+        .drop("_prompt"))
     themes = themes.select(
         "theme_id", "size",
         F.expr("try_parse_json(ai_named):name::string").alias("theme_name"),

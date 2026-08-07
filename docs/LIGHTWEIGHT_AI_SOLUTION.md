@@ -8,7 +8,7 @@ Databricks AI functions — is the focus of this document.
 
 | # | Approach | Files | What it is | Strengths | Trade-offs |
 |---|----------|-------|-----------|-----------|-----------|
-| 1 | **Rule engine** | `rule_engine.py`, `tagger.py`, `voc_topic_model_job.py` | Faithful re-implementation of GM's XM Discover swim-lane rules | Deterministic, explainable, zero model cost, exact control-set replica | Manual rule upkeep; misses novel phrasing; brittle to wording |
+| 1 | **Rule engine** | `rule_engine.py`, `tagger.py`, `voc_classification_rule_job.py` | Faithful re-implementation of GM's XM Discover swim-lane rules | Deterministic, explainable, zero model cost, exact control-set replica | Manual rule upkeep; misses novel phrasing; brittle to wording |
 | 2 | **AI classification** | `ai_classify_job.py` (`ai_classify` + `ai_analyze_sentiment`) | An LLM assigns each sentence to a topic, steered by the topic's business definition; sentiment attached | No keyword maintenance; handles paraphrase/synonyms; adds sentiment | Non-deterministic; per-call cost; needs validation vs. control |
 | 3 | **Topic discovery** | `topic_discovery_job.py` (embeddings + KMeans + `ai_gen`) | Unsupervised — embeds sentences, clusters by meaning, auto-names themes | Finds themes nobody defined (the "global other" problem); no labels needed | Clusters need human interpretation; not a 1:1 control replica |
 |   | **Comparison** | `compare_approaches_job.py` | Agreement analysis: rules vs. AI per topic | Quantifies overlap; surfaces AI misses & rule gaps for SME review | Uses rules as *proxy* ground truth, not GM's true control |
@@ -41,22 +41,22 @@ Approach 3 is the discovery capability rules can't provide.
 1. Scope to English + audio + customer-side verbatims in the date range.
 2. `ai_classify(words, labels_json, options)` where `labels_json` maps each of
    the four POC topics (plus a "None of these" catch-all) to its business
-   definition pulled from the *same* `rules.json` the rule engine uses — so both
+   definition pulled from the *same* `category_model.json` the rule engine uses — so both
    tracks classify against identical topic definitions.
 3. `ai_analyze_sentiment(words)` adds positive/negative/neutral/mixed.
-4. Writes `voc_ai_topic_tags` (topic + confidence + sentiment per sentence).
+4. Writes `voc_classification_ai_tags` (topic + confidence + sentiment per sentence).
 
 **Topic discovery (`topic_discovery_job.py`)**
 1. Scope as above.
 2. Embed each sentence: `ai_query('databricks-gte-large-en', words)` → vector.
 3. Spark MLlib **KMeans** clusters the vectors into emergent themes.
 4. `ai_gen` auto-names each cluster from its representative verbatims.
-5. Writes `voc_discovered_themes` + `voc_theme_assignments`.
+5. Writes `voc_topicmodeling_themes` + `voc_topicmodeling_assignments`.
 
 **Comparison (`compare_approaches_job.py`)**
 Joins rule tags and AI tags on `id_verbatim`; per topic reports agreement,
 rule-only, AI-only, and AI precision/recall/F1 using the rule engine as a proxy
-control. Writes `voc_approach_comparison`.
+control. Writes `voc_classification_comparison`.
 
 ## Requirements & cost
 
@@ -73,7 +73,7 @@ control. Writes `voc_approach_comparison`.
 databricks bundle deploy -t sandbox -p daria_k_sandbox
 
 # Track 1 (rules) — produces the control tags the comparison needs
-databricks bundle run voc_topic_model_job -t sandbox -p daria_k_sandbox
+databricks bundle run voc_classification_rule_job -t sandbox -p daria_k_sandbox
 
 # Track 2 (AI classify + discovery + compare)
 databricks bundle run voc_ai_pipeline_job -t sandbox -p daria_k_sandbox
@@ -83,12 +83,12 @@ databricks bundle run voc_ai_pipeline_job -t sandbox -p daria_k_sandbox
 
 | Table | Produced by | Contents |
 |-------|-------------|----------|
-| `voc_topic_tags` | rules | per-sentence topic flags + matched terms |
-| `voc_topic_frequencies` | rules | topic counts |
-| `voc_ai_topic_tags` | AI classify | per-sentence AI topic + confidence + sentiment |
-| `voc_discovered_themes` | discovery | emergent themes with names/summaries |
-| `voc_theme_assignments` | discovery | sentence → theme_id |
-| `voc_approach_comparison` | compare | rules-vs-AI agreement per topic |
+| `voc_classification_rule_tags` | rules | per-sentence topic flags + matched terms |
+| `voc_classification_rule_frequencies` | rules | topic counts |
+| `voc_classification_ai_tags` | AI classify | per-sentence AI topic + confidence + sentiment |
+| `voc_topicmodeling_themes` | discovery | emergent themes with names/summaries |
+| `voc_topicmodeling_assignments` | discovery | sentence → theme_id |
+| `voc_classification_comparison` | compare | rules-vs-AI agreement per topic |
 
 ## Caveats to verify on first real run
 

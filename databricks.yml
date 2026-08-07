@@ -1,12 +1,12 @@
-# Databricks Asset Bundle for the GM VOC topic-model POC.
+# Databricks Asset Bundle for the GM VOC POC.
 #
 # Deploy:   databricks bundle deploy  -t sandbox -p daria_k_sandbox
-# Run:      databricks bundle run voc_topic_model_job -t sandbox -p daria_k_sandbox
+# Run:      databricks bundle run voc_classification_rule_job -t sandbox -p daria_k_sandbox
 # Destroy:  databricks bundle destroy -t sandbox -p daria_k_sandbox
 bundle:
-  name: gm_voc_topic_model
+  name: gm_voc
 
-# Ship the engine + rules alongside the job so imports resolve on the cluster.
+# Ship the engine + category model alongside the job so imports resolve on the cluster.
 include: []
 
 targets:
@@ -20,51 +20,51 @@ resources:
   jobs:
 
     # ----------------------------------------------------------------------
-    # Track 1 — deterministic rule engine (XM Discover replica).
+    # Classification (using rule engine) — applies GM's category model rules.
     # ----------------------------------------------------------------------
-    voc_topic_model_job:
-      name: "[${bundle.target}] GM VOC Topic Model (rules)"
+    voc_classification_rule_job:
+      name: "[${bundle.target}] GM VOC Classification (rule engine)"
       tasks:
-        - task_key: tag_verbatims
+        - task_key: classify_rules
           # Serverless: no cluster to configure. Uses the workspace default.
           notebook_task:
-            notebook_path: ./rule_engine/run_job_notebook.py
+            notebook_path: ./classification_rule_engine/run_job_notebook.py
             base_parameters:
               sentence_table: daria_krasavina.gm_voc.qualtrics_audio_transcripts_sentence_level_sample_data
               metadata_table: daria_krasavina.gm_voc.qualtrics_audio_transcripts_metadata_sample_data
-              tags_table: daria_krasavina.gm_voc.voc_topic_tags
-              freq_table: daria_krasavina.gm_voc.voc_topic_frequencies
+              tags_table: daria_krasavina.gm_voc.voc_classification_rule_tags
+              freq_table: daria_krasavina.gm_voc.voc_classification_rule_frequencies
               date_start: "2025-07-01"
               date_end: "2026-06-30"
       queue:
         enabled: true
 
     # ----------------------------------------------------------------------
-    # Track 2 — lightweight AI-powered solution (Databricks AI functions):
-    # AI classify + topic discovery. AI functions require serverless + DBR 18.2+.
+    # Classification (using ai_classify) + topic modeling.
+    # AI functions require serverless + DBR 18.2+.
     # ----------------------------------------------------------------------
-    voc_ai_pipeline_job:
-      name: "[${bundle.target}] GM VOC Lightweight AI Solution (ai_classify + discovery)"
+    voc_classification_ai_job:
+      name: "[${bundle.target}] GM VOC Classification (ai_classify) + Topic Modeling"
       tasks:
-        - task_key: ai_classify
+        - task_key: classify_ai
           notebook_task:
-            notebook_path: ./ai_solution/run_ai_classify_notebook.py
+            notebook_path: ./classification_ai/run_ai_classify_notebook.py
             base_parameters:
               sentence_table: daria_krasavina.gm_voc.qualtrics_audio_transcripts_sentence_level_sample_data
               metadata_table: daria_krasavina.gm_voc.qualtrics_audio_transcripts_metadata_sample_data
-              ai_tags_table: daria_krasavina.gm_voc.voc_ai_topic_tags
+              ai_tags_table: daria_krasavina.gm_voc.voc_classification_ai_tags
               date_start: "2025-07-01"
               date_end: "2026-06-30"
               ai_version: "2.1"
               sample_limit: "200"
 
-        - task_key: topic_discovery
+        - task_key: topic_modeling
           notebook_task:
-            notebook_path: ./ai_solution/run_topic_discovery_notebook.py
+            notebook_path: ./topic_modeling/run_topic_discovery_notebook.py
             base_parameters:
               sentence_table: daria_krasavina.gm_voc.qualtrics_audio_transcripts_sentence_level_sample_data
-              themes_table: daria_krasavina.gm_voc.voc_discovered_themes
-              assignments_table: daria_krasavina.gm_voc.voc_theme_assignments
+              themes_table: daria_krasavina.gm_voc.voc_topicmodeling_themes
+              assignments_table: daria_krasavina.gm_voc.voc_topicmodeling_assignments
               date_start: "2025-07-01"
               date_end: "2026-06-30"
               embedding_endpoint: databricks-gte-large-en
@@ -75,27 +75,26 @@ resources:
         enabled: true
 
     # ----------------------------------------------------------------------
-    # Cross-track comparison — rules (Track 1) vs. ai_classify (Track 2).
-    # Standalone job: run it AFTER both voc_topic_model_job and
-    # voc_ai_pipeline_job have produced their tag tables.
+    # Comparison — Classification (rule engine) vs. Classification (ai_classify).
+    # Standalone job: run it AFTER both classification jobs have produced tags.
     # ----------------------------------------------------------------------
-    voc_compare_job:
-      name: "[${bundle.target}] GM VOC Compare (rules vs AI)"
+    voc_classification_compare_job:
+      name: "[${bundle.target}] GM VOC Classification Compare (rule engine vs ai_classify)"
       tasks:
-        - task_key: compare_approaches
+        - task_key: compare_classification
           notebook_task:
-            notebook_path: ./ai_solution/run_compare_notebook.py
+            notebook_path: ./classification_ai/run_compare_notebook.py
             base_parameters:
-              rule_tags_table: daria_krasavina.gm_voc.voc_topic_tags
-              ai_tags_table: daria_krasavina.gm_voc.voc_ai_topic_tags
-              comparison_table: daria_krasavina.gm_voc.voc_approach_comparison
+              rule_tags_table: daria_krasavina.gm_voc.voc_classification_rule_tags
+              ai_tags_table: daria_krasavina.gm_voc.voc_classification_ai_tags
+              comparison_table: daria_krasavina.gm_voc.voc_classification_comparison
       queue:
         enabled: true
 
     # ----------------------------------------------------------------------
-    # Track 3 — trained transformer sentiment model (Qualtrics-faithful).
+    # Sentiment model — complementary track (how the customer feels).
     # train: weak-label via LLM -> fine-tune DistilBERT -> log/register in MLflow.
-    # score: apply the registered model + VADER lexicon baseline.
+    # score: apply the registered model + VADER baseline.
     # Requires Databricks Runtime for ML (GPU recommended for training).
     # ----------------------------------------------------------------------
     voc_sentiment_model_job:

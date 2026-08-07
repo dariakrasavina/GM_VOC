@@ -17,11 +17,11 @@ SCOPE: DBX POC global filter (English, audio, customer-side, non-boilerplate)
        + document_date in [2025-07-01, 2026-06-30]
 
 OUTPUT (Delta):
-  <output_catalog>.<output_schema>.voc_topic_tags            (per-sentence tags)
-  <output_catalog>.<output_schema>.voc_topic_frequencies     (aggregates)
+  <output_catalog>.<output_schema>.voc_classification_rule_tags            (per-sentence tags)
+  <output_catalog>.<output_schema>.voc_classification_rule_frequencies     (aggregates)
 
 To make the engine importable on executors, ship rule_engine.py, tagger.py and
-rules.json with the job (e.g. --py-files, a wheel, or a Repos path on sys.path).
+category_model.json with the job (e.g. --py-files, a wheel, or a Repos path on sys.path).
 """
 import json
 import os
@@ -31,8 +31,8 @@ import sys
 DEFAULTS = {
     "sentence_table": "daria_krasavina.gm_voc.qualtrics_audio_transcripts_sentence_level_sample_data",
     "metadata_table": "daria_krasavina.gm_voc.qualtrics_audio_transcripts_metadata_sample_data",
-    "tags_table": "daria_krasavina.gm_voc.voc_topic_tags",
-    "freq_table": "daria_krasavina.gm_voc.voc_topic_frequencies",
+    "tags_table": "daria_krasavina.gm_voc.voc_classification_rule_tags",
+    "freq_table": "daria_krasavina.gm_voc.voc_classification_rule_frequencies",
     "date_start": "2025-07-01",
     "date_end": "2026-06-30",
 }

@@ -5,7 +5,7 @@ Renders a self-contained HTML review dashboard from the outputs produced by
 run_local.py (run_summary.json + representative_verbatims.json). No external
 JS/CSS dependencies so it opens straight in a browser.
 
-    python3 rule_engine/build_dashboard.py --out outputs/
+    python3 classification_rule_engine/build_dashboard.py --out outputs/
 """
 import argparse
 import html

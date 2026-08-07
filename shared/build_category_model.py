@@ -1,14 +1,14 @@
 """
-build_rules_config.py
+build_category_model.py
 ----------------------
-Generates `rules.json` from the source XM Discover export
+Generates `category_model.json` from the source XM Discover export
 (`requirements/Qualtrics_Parent_and_Leaf_Nodes.xlsx`).
 
 We generate the config from the workbook instead of hand-transcribing the rule
 strings, so the encoded rules are provably identical to what GM's text-analytics
 team maintains in XM Discover Designer. Re-run this whenever the workbook changes.
 
-Output schema (rules.json):
+Output schema (category_model.json):
 {
   "source_workbook": "...",
   "global_filter": { "name", "description", "lanes": {keywords, and, and2, not} },
@@ -30,7 +30,7 @@ import zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 XLSX = os.path.join(REPO, "requirements", "Qualtrics_Parent_and_Leaf_Nodes.xlsx")
-OUT = os.path.join(HERE, "rules.json")
+OUT = os.path.join(HERE, "category_model.json")
 
 # Column header -> internal key. Only the four active rule lanes are consumed by
 # the POC engine; the Verbatim / Parent Doc / Other Verbatim lanes are unused in

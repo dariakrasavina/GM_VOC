@@ -5,7 +5,7 @@ Local, stdlib-only driver that exercises the SAME tagging core as the Spark job
 against the sample CSVs in test_data/. Use it to validate rule fidelity and to
 produce the POC review outputs without a Databricks cluster.
 
-    python3 rule_engine/run_local.py \
+    python3 classification_rule_engine/run_local.py \
         --sentences test_data/qualtrics_audio_transcripts_sentence_level_sample_data.csv \
         --metadata  test_data/qualtrics_audio_transcripts_metadata_sample_data.csv \
         --out outputs/
@@ -75,7 +75,7 @@ def main():
     ap.add_argument("--metadata", default=os.path.join(
         repo, "test_data", "qualtrics_audio_transcripts_metadata_sample_data.csv"))
     ap.add_argument("--rules", default=None,
-                    help="Path to rules.json (default: auto-resolve shared/rules.json)")
+                    help="Path to category_model.json (default: auto-resolve shared/category_model.json)")
     ap.add_argument("--out", default=os.path.join(repo, "outputs"))
     args = ap.parse_args()
 

@@ -2,8 +2,8 @@
 compare_approaches_job.py
 -------------------------
 Regression / agreement analysis between the two classification tracks:
-  A) rule engine   -> voc_topic_tags        (deterministic XM Discover replica)
-  B) AI classifier -> voc_ai_topic_tags      (LLM via ai_classify)
+  A) rule engine   -> voc_classification_rule_tags        (deterministic XM Discover replica)
+  B) AI classifier -> voc_classification_ai_tags      (LLM via ai_classify)
 
 This is the POC's "show regression results against the current solution"
 deliverable, reframed for the AI track: it quantifies where the ML approach
@@ -25,26 +25,26 @@ import os
 import sys
 
 DEFAULTS = {
-    "rule_tags_table": "daria_krasavina.gm_voc.voc_topic_tags",
-    "ai_tags_table": "daria_krasavina.gm_voc.voc_ai_topic_tags",
-    "comparison_table": "daria_krasavina.gm_voc.voc_approach_comparison",
+    "rule_tags_table": "daria_krasavina.gm_voc.voc_classification_rule_tags",
+    "ai_tags_table": "daria_krasavina.gm_voc.voc_classification_ai_tags",
+    "comparison_table": "daria_krasavina.gm_voc.voc_classification_comparison",
 }
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 
-def find_rules_json():
-    """Locate shared/rules.json regardless of folder layout (see tagger.py)."""
+def find_category_model():
+    """Locate shared/category_model.json regardless of folder layout (see tagger.py)."""
     repo = os.path.dirname(HERE)
-    for c in (os.path.join(HERE, "rules.json"),
-              os.path.join(repo, "shared", "rules.json"),
-              os.path.join(HERE, "shared", "rules.json"),
-              os.path.join(os.getcwd(), "rules.json"),
-              os.path.join(os.getcwd(), "shared", "rules.json")):
+    for c in (os.path.join(HERE, "category_model.json"),
+              os.path.join(repo, "shared", "category_model.json"),
+              os.path.join(HERE, "shared", "category_model.json"),
+              os.path.join(os.getcwd(), "category_model.json"),
+              os.path.join(os.getcwd(), "shared", "category_model.json")):
         if os.path.exists(c):
             return c
-    raise FileNotFoundError("rules.json not found near %s" % HERE)
+    raise FileNotFoundError("category_model.json not found near %s" % HERE)
 
 
 def get_params():
@@ -71,15 +71,12 @@ def get_params():
     return params
 
 
-def target_topics():
-    """(rule_column_id, ai_label_name) for each POC comparison topic."""
-    with open(find_rules_json()) as f:
+def all_categories():
+    """[(category_id, name, is_target) ...] in model order."""
+    with open(find_category_model()) as f:
         rules = json.load(f)
-    out = []
-    for n in rules["nodes"]:
-        if n.get("comparison_target"):
-            out.append((n["id"], n["name"]))
-    return out
+    return [(n["id"], n["name"], n.get("comparison_target", False))
+            for n in rules["nodes"]]
 
 
 def run():
@@ -91,31 +88,33 @@ def run():
     print("Params: %s" % params)
 
     rules = spark.table(params["rule_tags_table"])
-    ai = spark.table(params["ai_tags_table"]).select(
-        "id_verbatim", F.col("ai_topic"))
+    ai = spark.table(params["ai_tags_table"])
+
+    # Both tables now carry one 0/1 column per category (leaves + rolled-up
+    # parents), so we can compare like-for-like per category on the shared
+    # sentences (join on id_verbatim). Only categories present in BOTH tables
+    # are compared.
+    cats = [(cid, name, tgt) for (cid, name, tgt) in all_categories()
+            if cid in rules.columns and cid in ai.columns]
 
     rows = []
-    for rule_col, ai_label in target_topics():
-        # Rule-side positives for this topic (column is 0/1).
-        r = rules.select("id_verbatim", F.col(rule_col).alias("rule_pos"))
-        joined = r.join(ai, on="id_verbatim", how="inner")
-        joined = joined.withColumn(
-            "ai_pos", (F.col("ai_topic") == F.lit(ai_label)).cast("int"))
+    for cid, name, is_target in cats:
+        r = rules.select("id_verbatim", F.col(cid).alias("rule_pos"))
+        a = ai.select("id_verbatim", F.col(cid).alias("ai_pos"))
+        joined = r.join(a, on="id_verbatim", how="inner")
 
         agg = joined.agg(
-            F.sum("rule_pos").alias("rule_positives"),
-            F.sum("ai_pos").alias("ai_positives"),
-            F.sum((F.col("rule_pos") == 1) & (F.col("ai_pos") == 1)).cast("int").alias("_x"),
             F.count("*").alias("n"),
+            F.sum("rule_pos").alias("rule_pos"),
+            F.sum("ai_pos").alias("ai_pos"),
+            F.sum((F.col("rule_pos") == 1) & (F.col("ai_pos") == 1)).cast("int").alias("both"),
+            F.sum((F.col("rule_pos") == 1) & (F.col("ai_pos") == 0)).cast("int").alias("rule_only"),
+            F.sum((F.col("rule_pos") == 0) & (F.col("ai_pos") == 1)).cast("int").alias("ai_only"),
         ).collect()[0]
 
-        # Recompute agreement counts explicitly (booleans -> ints).
-        both = joined.filter((F.col("rule_pos") == 1) & (F.col("ai_pos") == 1)).count()
-        rule_only = joined.filter((F.col("rule_pos") == 1) & (F.col("ai_pos") == 0)).count()
-        ai_only = joined.filter((F.col("rule_pos") == 0) & (F.col("ai_pos") == 1)).count()
-
-        rule_positives = int(agg["rule_positives"] or 0)
-        ai_positives = int(agg["ai_positives"] or 0)
+        rule_positives = int(agg["rule_pos"] or 0)
+        ai_positives = int(agg["ai_pos"] or 0)
+        both = int(agg["both"] or 0)
         # AI metrics using the rule engine as (proxy) ground truth.
         precision = (both / ai_positives) if ai_positives else None
         recall = (both / rule_positives) if rule_positives else None
@@ -123,10 +122,11 @@ def run():
               if precision and recall else None)
 
         rows.append(Row(
-            topic_id=rule_col, ai_label=ai_label,
+            category_id=cid, category=name, is_target=bool(is_target),
             compared_sentences=int(agg["n"] or 0),
             rule_positives=rule_positives, ai_positives=ai_positives,
-            agree_positive=both, rule_only=rule_only, ai_only=ai_only,
+            agree_positive=both, rule_only=int(agg["rule_only"] or 0),
+            ai_only=int(agg["ai_only"] or 0),
             ai_precision_vs_rules=precision, ai_recall_vs_rules=recall,
             ai_f1_vs_rules=f1))
 

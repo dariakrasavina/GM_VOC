@@ -96,8 +96,8 @@ representative data (see below).
 ## Recommended next steps
 
 1. Get a real, de-identified sample (a few days of in-scope audio) into the POC
-   schema and rerun `voc_topic_model_job.py`.
-2. Join Databricks `voc_topic_tags` to the XM Discover control tags on
+   schema and rerun `voc_classification_rule_job.py`.
+2. Join Databricks `voc_classification_rule_tags` to the XM Discover control tags on
    `id_verbatim` and produce a confusion matrix per node (precision/recall/F1).
 3. Tune only where regressions appear; because rules are explainable, each
    mismatch points at a specific lane term.

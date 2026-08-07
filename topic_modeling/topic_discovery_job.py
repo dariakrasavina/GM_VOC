@@ -34,8 +34,8 @@ import sys
 
 DEFAULTS = {
     "sentence_table": "daria_krasavina.gm_voc.qualtrics_audio_transcripts_sentence_level_sample_data",
-    "themes_table": "daria_krasavina.gm_voc.voc_discovered_themes",
-    "assignments_table": "daria_krasavina.gm_voc.voc_theme_assignments",
+    "themes_table": "daria_krasavina.gm_voc.voc_topicmodeling_themes",
+    "assignments_table": "daria_krasavina.gm_voc.voc_topicmodeling_assignments",
     "date_start": "2025-07-01",
     "date_end": "2026-06-30",
     "embedding_endpoint": "databricks-gte-large-en",

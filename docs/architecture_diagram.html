@@ -16,65 +16,67 @@
 </head>
 <body>
   <h1>GM VOC POC — Architecture</h1>
-  <p>Three tracks. Tracks 1 and 2 both do <b>topic tagging</b> and are
-     <b>compared</b> so GM can pick the best. Track 3 does <b>sentiment</b> and is
-     used <b>alongside</b> the winner.</p>
+  <p>Two tracks do <b>classification</b> and are <b>compared</b> so GM can pick
+     the best. <b>Topic modeling</b> discovers new themes. The <b>sentiment
+     model</b> is used <b>alongside</b> the winner.</p>
 
   <h2>1. The big picture</h2>
   <div class="diagram"><pre class="mermaid">
 flowchart LR
     DATA["Call transcripts<br/>(one row per sentence)"]
-    subgraph TOPICS["Topic tagging — compare & pick"]
-        T1["Track 1<br/>Rule engine"]
-        T2["Track 2<br/>AI functions"]
+    subgraph CLS["Classification — compare & pick"]
+        RE["Rule engine"]
+        AI["ai_classify"]
     end
-    T3["Track 3<br/>Sentiment model"]
-    OUT["Topic + Sentiment<br/>per sentence"]
-    DATA --> T1
-    DATA --> T2
-    DATA --> T3
-    T1 --> CMP{{"Compare<br/>rules vs AI"}}
-    T2 --> CMP
+    TM["Topic modeling<br/>(find new themes)"]
+    SENT["Sentiment model"]
+    OUT["Category + Sentiment<br/>per sentence"]
+    DATA --> RE
+    DATA --> AI
+    DATA --> TM
+    DATA --> SENT
+    RE --> CMP{{"Compare"}}
+    AI --> CMP
     CMP --> OUT
-    T3 --> OUT
+    SENT --> OUT
   </pre></div>
 
-  <h2>2. Track 1 — Rule engine (topic tagging)</h2>
+  <h2>2. Classification — rule engine</h2>
   <div class="diagram"><pre class="mermaid">
 flowchart LR
-    RULES["rules.json<br/>(GM's topic rules)"]
+    CM["category_model.json<br/>(GM's categories + rules)"]
     IN["Sentences"]
     ENGINE["Rule engine<br/>keyword / phrase / boolean match"]
-    TAGS["Topic tags<br/>+ which words matched"]
-    RULES --> ENGINE
+    TAGS["Categories per sentence<br/>+ which words matched"]
+    CM --> ENGINE
     IN --> ENGINE --> TAGS
   </pre></div>
 
-  <h2>3. Track 2 — AI functions (tagging + theme discovery)</h2>
+  <h2>3. Classification — ai_classify (+ topic modeling)</h2>
   <div class="diagram"><pre class="mermaid">
 flowchart LR
     IN["Sentences"]
-    CLASSIFY["ai_classify<br/>pick one of the 4 topics"]
-    DISCOVER["embeddings + clustering<br/>find brand-new themes"]
-    TAGS["AI topic tags"]
-    THEMES["Discovered themes"]
+    CLASSIFY["ai_classify<br/>assign the 4 categories"]
+    DISCOVER["topic modeling<br/>embeddings + clustering"]
+    TAGS["AI category tags"]
+    THEMES["New themes"]
     IN --> CLASSIFY --> TAGS
     IN --> DISCOVER --> THEMES
   </pre></div>
 
-  <h2>4. Compare — rules vs AI</h2>
+  <h2>4. Compare — rule engine vs ai_classify</h2>
   <div class="diagram"><pre class="mermaid">
 flowchart LR
-    R["Track 1 tags"]
-    A["Track 2 tags"]
+    R["Rule-engine tags"]
+    A["ai_classify tags"]
     C["Compare job"]
-    OUT["Agreement per topic<br/>(where they match / differ)"]
+    OUT["Agreement per category<br/>(where they match / differ)"]
     R --> C
     A --> C
     C --> OUT
   </pre></div>
 
-  <h2>5. Track 3 — Sentiment model</h2>
+  <h2>5. Sentiment model</h2>
   <div class="diagram"><pre class="mermaid">
 flowchart LR
     IN["Sentences"]

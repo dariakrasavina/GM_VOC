@@ -148,24 +148,34 @@ def run():
                  F.slice(F.collect_list("words"), 1, 8).alias("examples")))
     reps = reps.withColumn(
         "examples_text", F.concat_ws("; ", F.col("examples")))
+    # Ask for a rigid two-line format instead of JSON. JSON from ai_gen was
+    # fragile — markdown fences, embedded quotes/apostrophes in the summary, and
+    # trailing commas all broke try_parse_json and left names null. A plain
+    # "NAME: ...\nSUMMARY: ..." format parses with simple line regex and is
+    # immune to those issues.
     name_prompt = (
         "You are analyzing customer service call transcripts. Below are example "
-        "customer sentences from one cluster. Respond with a JSON object with "
-        'two keys: "name" (a 2-5 word theme label) and "summary" (one '
-        "sentence describing the theme). Sentences: ")
-    # Build the ai_gen input by concatenating a lit prompt column with the
-    # examples column, so the prompt text (quotes, punctuation) never touches
-    # SQL parsing.
+        "customer sentences from one cluster. Reply with EXACTLY two lines and "
+        "nothing else:\n"
+        "NAME: a 2 to 5 word theme label\n"
+        "SUMMARY: one sentence describing the theme\n"
+        "Sentences: ")
     themes = (reps
         .withColumn("_prompt", F.lit(name_prompt))
         .withColumn("ai_named", F.expr("ai_gen(concat(_prompt, examples_text))"))
         .drop("_prompt"))
+    # Line-based extraction: tolerant of surrounding prose, code fences, quotes.
     themes = themes.select(
         "theme_id", "size",
-        F.expr("try_parse_json(ai_named):name::string").alias("theme_name"),
-        F.expr("try_parse_json(ai_named):summary::string").alias("theme_summary"),
+        F.regexp_extract(F.col("ai_named"), r"(?im)^\s*NAME:\s*(.+?)\s*$", 1).alias("theme_name"),
+        F.regexp_extract(F.col("ai_named"), r"(?im)^\s*SUMMARY:\s*(.+?)\s*$", 1).alias("theme_summary"),
         F.col("ai_named").alias("ai_named_raw"),
         "examples")
+    # Empty-string extractions (no match) -> NULL for cleaner reporting.
+    themes = themes.withColumn(
+        "theme_name", F.when(F.length("theme_name") > 0, F.col("theme_name")))
+    themes = themes.withColumn(
+        "theme_summary", F.when(F.length("theme_summary") > 0, F.col("theme_summary")))
     themes = themes.orderBy(F.col("size").desc())
     themes.write.mode("overwrite").format("delta") \
         .option("overwriteSchema", "true").saveAsTable(params["themes_table"])

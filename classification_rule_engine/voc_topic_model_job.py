@@ -193,6 +193,13 @@ def run():
     keep = [c for c in keep if c in tagged.columns]
     tagged_out = tagged.select(*keep, *topic_ids, *[t + "__terms" for t in topic_ids])
 
+    # Persist ONLY in-scope rows (customer-side English audio, non-boilerplate),
+    # matching the POC requirement ("customer-side verbatims only") and the AI
+    # job's scope — so voc_classification_rule_tags and voc_classification_ai_tags
+    # cover the same population and compare row-for-row. Agent-side, non-English,
+    # and boilerplate rows are dropped rather than kept with all-zero tags.
+    tagged_out = tagged_out.filter(F.col("in_scope") == True)  # noqa: E712
+
     (tagged_out.write.mode("overwrite").format("delta")
         .option("overwriteSchema", "true").saveAsTable(tags_table))
 

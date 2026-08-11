@@ -112,9 +112,13 @@ def main():
             text = srow.get(TEXT_FIELD, "") or ""
             attrs = build_attrs(srow, meta)
             in_scope, _ = tagger.in_scope(text, attrs)
-            tags = tagger.tag(text, attrs) if in_scope else {}
-            if in_scope:
-                n_scope += 1
+            # Only in-scope rows (customer-side English audio, non-boilerplate)
+            # are written, matching the POC requirement and the Spark job — so
+            # the output covers the same population as the AI table.
+            if not in_scope:
+                continue
+            n_scope += 1
+            tags = tagger.tag(text, attrs)
 
             row_out = [
                 srow.get("natural_id"), srow.get("id_document"),

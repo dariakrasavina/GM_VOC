@@ -32,10 +32,16 @@ pay-per-token — use sample_limit.
 import os
 import sys
 
+# Standalone/local defaults; the bundle passes full table names as params in
+# production (built from bundle variables), overriding these.
+CATALOG = "daria_krasavina"
+SCHEMA = "gm_voc"
+_NS = "%s.%s" % (CATALOG, SCHEMA)
+
 DEFAULTS = {
-    "sentence_table": "daria_krasavina.gm_voc.qualtrics_audio_transcripts_sentence_level_sample_data",
-    "themes_table": "daria_krasavina.gm_voc.voc_topicmodeling_themes",
-    "assignments_table": "daria_krasavina.gm_voc.voc_topicmodeling_assignments",
+    "sentence_table": _NS + ".qualtrics_audio_transcripts_sentence_level_sample_data",
+    "themes_table": _NS + ".voc_topicmodeling_themes",
+    "assignments_table": _NS + ".voc_topicmodeling_assignments",
     "date_start": "2025-07-01",
     "date_end": "2026-06-30",
     "embedding_endpoint": "databricks-gte-large-en",

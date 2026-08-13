@@ -37,10 +37,16 @@ import json
 import os
 import sys
 
+# Standalone/local defaults; the bundle passes full table names as params in
+# production (built from bundle variables), overriding these.
+CATALOG = "daria_krasavina"
+SCHEMA = "gm_voc"
+_NS = "%s.%s" % (CATALOG, SCHEMA)
+
 DEFAULTS = {
-    "sentence_table": "daria_krasavina.gm_voc.qualtrics_audio_transcripts_sentence_level_sample_data",
-    "metadata_table": "daria_krasavina.gm_voc.qualtrics_audio_transcripts_metadata_sample_data",
-    "ai_tags_table": "daria_krasavina.gm_voc.voc_classification_ai_tags",
+    "sentence_table": _NS + ".qualtrics_audio_transcripts_sentence_level_sample_data",
+    "metadata_table": _NS + ".qualtrics_audio_transcripts_metadata_sample_data",
+    "ai_tags_table": _NS + ".voc_classification_ai_tags",
     "date_start": "2025-07-01",
     "date_end": "2026-06-30",
     # LLM endpoint used for multi-label classification via ai_query.

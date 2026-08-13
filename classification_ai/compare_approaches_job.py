@@ -24,10 +24,16 @@ import json
 import os
 import sys
 
+# Standalone/local defaults; the bundle passes full table names as params in
+# production (built from bundle variables), overriding these.
+CATALOG = "daria_krasavina"
+SCHEMA = "gm_voc"
+_NS = "%s.%s" % (CATALOG, SCHEMA)
+
 DEFAULTS = {
-    "rule_tags_table": "daria_krasavina.gm_voc.voc_classification_rule_tags",
-    "ai_tags_table": "daria_krasavina.gm_voc.voc_classification_ai_tags",
-    "comparison_table": "daria_krasavina.gm_voc.voc_classification_comparison",
+    "rule_tags_table": _NS + ".voc_classification_rule_tags",
+    "ai_tags_table": _NS + ".voc_classification_ai_tags",
+    "comparison_table": _NS + ".voc_classification_comparison",
 }
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:

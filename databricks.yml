@@ -1,41 +1,134 @@
 # Databricks Asset Bundle for the GM VOC POC.
 #
-# Deploy:   databricks bundle deploy  -t sandbox -p daria_k_sandbox
-# Run:      databricks bundle run voc_classification_rule_job -t sandbox -p daria_k_sandbox
-# Destroy:  databricks bundle destroy -t sandbox -p daria_k_sandbox
+# Deploy (dev):     databricks bundle deploy -t sandbox -p <profile>
+# Deploy (client):  databricks bundle deploy -t client  -p <client-profile>
+# Run a job:        databricks bundle run <job_key> -t <target> -p <profile>
+# Destroy:          databricks bundle destroy -t <target> -p <profile>
+#
+# PORTABILITY: everything workspace-specific is a variable below. To deploy to a
+# new (client) workspace you only change the `client` target's variable values
+# and its host — no table names are hardcoded. See docs/DEPLOYMENT.md.
 bundle:
   name: gm_voc
 
-# Ship the engine + category model alongside the job so imports resolve on the cluster.
 include: []
 
+# ---------------------------------------------------------------------------
+# Variables — the knobs you change per environment. Table names are DERIVED
+# from `catalog` + `schema`, so switching environments is just two values
+# (plus the workspace host and, for the GPU job, node type / runtime).
+# ---------------------------------------------------------------------------
+variables:
+  # SOURCE location — where the input transcript + metadata tables live.
+  catalog:
+    description: Source Unity Catalog catalog (holds the input tables).
+    default: daria_krasavina
+  schema:
+    description: Source schema (holds the input tables).
+    default: gm_voc
+
+  # TARGET location — where the classification / topic / sentiment OUTPUT tables
+  # are written. Defaults to the source catalog/schema when not set, so if you
+  # don't specify a target, outputs land alongside the source.
+  target_catalog:
+    description: Catalog for output tables. Defaults to the source catalog.
+    default: ${var.catalog}
+  target_schema:
+    description: Schema for output tables. Defaults to the source schema.
+    default: ${var.schema}
+
+  # Input tables (names only — the catalog/schema are prepended automatically).
+  # Override these if the client's source tables are named differently.
+  sentence_table_name:
+    description: Sentence-level transcript table (name only).
+    default: qualtrics_audio_transcripts_sentence_level_sample_data
+  metadata_table_name:
+    description: Call-level metadata table (name only).
+    default: qualtrics_audio_transcripts_metadata_sample_data
+
+  # Analysis window.
+  date_start:
+    default: "2025-07-01"
+  date_end:
+    default: "2026-06-30"
+
+  # Cost controls (rows sent to paid AI functions per run; 0 = full corpus).
+  ai_sample_limit:
+    default: "200"
+  sentiment_sample_limit:
+    default: "300"
+
+  # Foundation-model / AI-function endpoints. Verify these exist in the target
+  # workspace's region (names can differ by region / availability).
+  classify_endpoint:
+    default: databricks-meta-llama-3-3-70b-instruct
+  gen_endpoint:
+    default: databricks-meta-llama-3-3-70b-instruct
+  embedding_endpoint:
+    default: databricks-gte-large-en
+  label_endpoint:
+    default: databricks-meta-llama-3-3-70b-instruct
+
+  # GPU cluster for sentiment fine-tuning (cloud/region/quota-dependent).
+  gpu_spark_version:
+    description: Databricks Runtime ML (GPU) version.
+    default: 15.4.x-gpu-ml-scala2.12
+  gpu_node_type:
+    description: Single-GPU node type (Azure default; change for AWS/GCP).
+    default: Standard_NC4as_T4_v3
+
+  # MLflow experiment folder for the sentiment model.
+  experiment_path:
+    default: /Shared/gm_voc_sentiment
+
 targets:
+  # Development / origin workspace. Host is pinned here so `-t sandbox` works
+  # with no extra flags. (workspace.host is an auth-bootstrap field and does NOT
+  # support ${var.x} interpolation, so it's a literal or omitted.)
   sandbox:
     mode: development
     default: true
     workspace:
       host: https://adb-984752964297111.11.azuredatabricks.net
 
+  # Client workspace. Host is NOT hardcoded — it comes from the auth profile you
+  # pass with -p, or from the DATABRICKS_HOST env var, at deploy time:
+  #
+  #   databricks auth login -p <client-profile>   # stores host + creds
+  #   databricks bundle deploy -t client -p <client-profile> \
+  #     --var="catalog=<CATALOG>,schema=<SCHEMA>,\
+  # sentence_table_name=<SENTENCE_TABLE>,metadata_table_name=<METADATA_TABLE>"
+  #
+  # Or set DATABRICKS_HOST + credentials as env vars (CI/CD). Override endpoints
+  # / gpu_node_type via --var the same way if the client region differs.
+  # See docs/DEPLOYMENT.md.
+  client:
+    mode: production
+    workspace:
+      # Required for mode: production. Host still comes from the profile /
+      # DATABRICKS_HOST (not set here). Scoped to the deploying user so the
+      # bundle root isn't world-writable.
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+
 resources:
   jobs:
 
     # ----------------------------------------------------------------------
-    # Classification (using rule engine) — applies GM's category model rules.
+    # Classification (using rule engine) — applies the category model rules.
     # ----------------------------------------------------------------------
     voc_classification_rule_job:
       name: "[${bundle.target}] GM VOC Classification (rule engine)"
       tasks:
         - task_key: classify_rules
-          # Serverless: no cluster to configure. Uses the workspace default.
           notebook_task:
             notebook_path: ./classification_rule_engine/run_job_notebook.py
             base_parameters:
-              sentence_table: daria_krasavina.gm_voc.qualtrics_audio_transcripts_sentence_level_sample_data
-              metadata_table: daria_krasavina.gm_voc.qualtrics_audio_transcripts_metadata_sample_data
-              tags_table: daria_krasavina.gm_voc.voc_classification_rule_tags
-              freq_table: daria_krasavina.gm_voc.voc_classification_rule_frequencies
-              date_start: "2025-07-01"
-              date_end: "2026-06-30"
+              sentence_table: ${var.catalog}.${var.schema}.${var.sentence_table_name}
+              metadata_table: ${var.catalog}.${var.schema}.${var.metadata_table_name}
+              tags_table: ${var.target_catalog}.${var.target_schema}.voc_classification_rule_tags
+              freq_table: ${var.target_catalog}.${var.target_schema}.voc_classification_rule_frequencies
+              date_start: ${var.date_start}
+              date_end: ${var.date_end}
       queue:
         enabled: true
 
@@ -50,27 +143,27 @@ resources:
           notebook_task:
             notebook_path: ./classification_ai/run_ai_classify_notebook.py
             base_parameters:
-              sentence_table: daria_krasavina.gm_voc.qualtrics_audio_transcripts_sentence_level_sample_data
-              metadata_table: daria_krasavina.gm_voc.qualtrics_audio_transcripts_metadata_sample_data
-              ai_tags_table: daria_krasavina.gm_voc.voc_classification_ai_tags
-              date_start: "2025-07-01"
-              date_end: "2026-06-30"
-              ai_version: "2.1"
-              sample_limit: "200"
+              sentence_table: ${var.catalog}.${var.schema}.${var.sentence_table_name}
+              metadata_table: ${var.catalog}.${var.schema}.${var.metadata_table_name}
+              ai_tags_table: ${var.target_catalog}.${var.target_schema}.voc_classification_ai_tags
+              date_start: ${var.date_start}
+              date_end: ${var.date_end}
+              classify_endpoint: ${var.classify_endpoint}
+              sample_limit: ${var.ai_sample_limit}
 
         - task_key: topic_modeling
           notebook_task:
             notebook_path: ./topic_modeling/run_topic_discovery_notebook.py
             base_parameters:
-              sentence_table: daria_krasavina.gm_voc.qualtrics_audio_transcripts_sentence_level_sample_data
-              themes_table: daria_krasavina.gm_voc.voc_topicmodeling_themes
-              assignments_table: daria_krasavina.gm_voc.voc_topicmodeling_assignments
-              date_start: "2025-07-01"
-              date_end: "2026-06-30"
-              embedding_endpoint: databricks-gte-large-en
-              gen_endpoint: databricks-meta-llama-3-3-70b-instruct
+              sentence_table: ${var.catalog}.${var.schema}.${var.sentence_table_name}
+              themes_table: ${var.target_catalog}.${var.target_schema}.voc_topicmodeling_themes
+              assignments_table: ${var.target_catalog}.${var.target_schema}.voc_topicmodeling_assignments
+              date_start: ${var.date_start}
+              date_end: ${var.date_end}
+              embedding_endpoint: ${var.embedding_endpoint}
+              gen_endpoint: ${var.gen_endpoint}
               num_clusters: "12"
-              sample_limit: "200"
+              sample_limit: ${var.ai_sample_limit}
       queue:
         enabled: true
 
@@ -85,9 +178,9 @@ resources:
           notebook_task:
             notebook_path: ./classification_ai/run_compare_notebook.py
             base_parameters:
-              rule_tags_table: daria_krasavina.gm_voc.voc_classification_rule_tags
-              ai_tags_table: daria_krasavina.gm_voc.voc_classification_ai_tags
-              comparison_table: daria_krasavina.gm_voc.voc_classification_comparison
+              rule_tags_table: ${var.target_catalog}.${var.target_schema}.voc_classification_rule_tags
+              ai_tags_table: ${var.target_catalog}.${var.target_schema}.voc_classification_ai_tags
+              comparison_table: ${var.target_catalog}.${var.target_schema}.voc_classification_comparison
       queue:
         enabled: true
 
@@ -95,39 +188,62 @@ resources:
     # Sentiment model — complementary track (how the customer feels).
     # train: weak-label via LLM -> fine-tune DistilBERT -> log/register in MLflow.
     # score: apply the registered model + VADER baseline.
-    # Requires Databricks Runtime for ML (GPU recommended for training).
+    # Runs on a single-node GPU cluster (Databricks Runtime ML for GPU) because
+    # transformer fine-tuning needs a GPU + PyTorch (serverless has neither and
+    # the Trainer's distributed init times out).
     # ----------------------------------------------------------------------
     voc_sentiment_model_job:
       name: "[${bundle.target}] GM VOC Sentiment Model (train + score)"
+      job_clusters:
+        - job_cluster_key: gpu_ml_single_node
+          new_cluster:
+            spark_version: ${var.gpu_spark_version}   # Databricks Runtime ML (GPU)
+            node_type_id: ${var.gpu_node_type}         # single-GPU node
+            num_workers: 0                             # single node
+            # SINGLE_USER enables Unity Catalog access (read tables + saveAsTable);
+            # without it the cluster defaults to a legacy mode -> UC_NOT_ENABLED.
+            data_security_mode: SINGLE_USER
+            spark_conf:
+              spark.databricks.cluster.profile: singleNode
+              spark.master: "local[*]"
+            custom_tags:
+              ResourceClass: SingleNode
+            # azure_attributes is Azure-specific; for AWS/GCP swap to
+            # aws_attributes / gcp_attributes (see docs/DEPLOYMENT.md).
+            azure_attributes:
+              availability: ON_DEMAND_AZURE
+              first_on_demand: 1
       tasks:
         - task_key: train_sentiment
+          job_cluster_key: gpu_ml_single_node
           notebook_task:
             notebook_path: ./sentiment_model/run_train_sentiment_notebook.py
             base_parameters:
-              sentence_table: daria_krasavina.gm_voc.qualtrics_audio_transcripts_sentence_level_sample_data
-              date_start: "2025-07-01"
-              date_end: "2026-06-30"
-              label_endpoint: databricks-meta-llama-3-3-70b-instruct
-              sample_limit: "300"
+              sentence_table: ${var.catalog}.${var.schema}.${var.sentence_table_name}
+              date_start: ${var.date_start}
+              date_end: ${var.date_end}
+              label_endpoint: ${var.label_endpoint}
+              sample_limit: ${var.sentiment_sample_limit}
               base_model: distilbert-base-uncased
               num_train_epochs: "3"
               batch_size: "16"
-              experiment_path: /Shared/gm_voc_sentiment
-              registered_model: daria_krasavina.gm_voc.voc_sentiment_transformer
-              weak_labels_table: daria_krasavina.gm_voc.voc_sentiment_weak_labels
+              experiment_path: ${var.experiment_path}
+              registered_model: ${var.target_catalog}.${var.target_schema}.voc_sentiment_transformer
+              weak_labels_table: ${var.target_catalog}.${var.target_schema}.voc_sentiment_weak_labels
 
         - task_key: score_sentiment
           depends_on:
             - task_key: train_sentiment
+          job_cluster_key: gpu_ml_single_node
           notebook_task:
             notebook_path: ./sentiment_model/run_score_sentiment_notebook.py
             base_parameters:
-              sentence_table: daria_krasavina.gm_voc.qualtrics_audio_transcripts_sentence_level_sample_data
-              scored_table: daria_krasavina.gm_voc.voc_sentiment_scored
-              registered_model: daria_krasavina.gm_voc.voc_sentiment_transformer
+              sentence_table: ${var.catalog}.${var.schema}.${var.sentence_table_name}
+              scored_table: ${var.target_catalog}.${var.target_schema}.voc_sentiment_scored
+              registered_model: ${var.target_catalog}.${var.target_schema}.voc_sentiment_transformer
               model_alias: champion
-              date_start: "2025-07-01"
-              date_end: "2026-06-30"
-              sample_limit: "300"
+              date_start: ${var.date_start}
+              date_end: ${var.date_end}
+              sample_limit: ${var.sentiment_sample_limit}
       queue:
         enabled: true

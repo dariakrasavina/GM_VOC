@@ -2,9 +2,9 @@
 # COMMAND ----------
 # GM VOC — Track 3: score verbatims with the registered transformer model +
 # the VADER lexicon baseline.
-# torch + transformers are needed to load/run the registered transformer model
-# on serverless compute (not pre-installed there). vaderSentiment for the baseline.
-%pip install -q torch transformers vaderSentiment
+# Runs on the GPU ML runtime where torch + transformers are pre-installed; only
+# add vaderSentiment (the baseline) which the runtime does not ship.
+%pip install -q vaderSentiment
 dbutils.library.restartPython()
 
 # COMMAND ----------

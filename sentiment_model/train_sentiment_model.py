@@ -43,8 +43,15 @@ REQUIREMENTS (cannot run in a plain local env — needs Databricks ML runtime):
 import os
 import sys
 
+# Catalog/schema used to build fully-qualified table names for standalone/local
+# runs. In production the Databricks bundle passes full table names as job
+# parameters (built from bundle variables), which override everything below.
+CATALOG = "daria_krasavina"
+SCHEMA = "gm_voc"
+_NS = "%s.%s" % (CATALOG, SCHEMA)
+
 DEFAULTS = {
-    "sentence_table": "daria_krasavina.gm_voc.qualtrics_audio_transcripts_sentence_level_sample_data",
+    "sentence_table": _NS + ".qualtrics_audio_transcripts_sentence_level_sample_data",
     "date_start": "2025-07-01",
     "date_end": "2026-06-30",
     # Weak-labeling LLM endpoint (zero-shot). Pay-per-token — keep sample small.
@@ -57,8 +64,8 @@ DEFAULTS = {
     "test_size": "0.2",
     # MLflow / Unity Catalog registration target.
     "experiment_path": "/Shared/gm_voc_sentiment",
-    "registered_model": "daria_krasavina.gm_voc.voc_sentiment_transformer",
-    "weak_labels_table": "daria_krasavina.gm_voc.voc_sentiment_weak_labels",
+    "registered_model": _NS + ".voc_sentiment_transformer",
+    "weak_labels_table": _NS + ".voc_sentiment_weak_labels",
 }
 
 TEXT_FIELD = "words"
@@ -197,6 +204,15 @@ def run():
             "macro_f1": f1.compute(predictions=preds, references=labels,
                                    average="macro")["f1"],
         }
+
+    # Single-node training only. Databricks compute (serverless especially) sets
+    # PyTorch distributed env vars (RANK, WORLD_SIZE, MASTER_ADDR/PORT, ...).
+    # HuggingFace TrainingArguments auto-detects these and tries to join a
+    # distributed process group at localhost:43111 — but there's no coordinator
+    # in a single-node job, so it hangs 30 min -> DistNetworkError. Clearing them
+    # keeps the Trainer in plain single-process mode. Harmless on any compute.
+    for _var in ("LOCAL_RANK", "RANK", "WORLD_SIZE", "MASTER_ADDR", "MASTER_PORT"):
+        os.environ.pop(_var, None)
 
     out_dir = "/tmp/gm_voc_sentiment"
     args = TrainingArguments(

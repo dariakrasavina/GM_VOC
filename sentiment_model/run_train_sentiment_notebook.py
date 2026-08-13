@@ -1,12 +1,11 @@
 # Databricks notebook source
 # COMMAND ----------
 # GM VOC — Track 3: train the transformer sentiment model (MLflow).
-# Requires Databricks Runtime for ML (GPU recommended) + serverless/Model-Serving
-# access for the ai_query weak-labeling step.
-# Install libs not already on the runtime. On serverless compute PyTorch is NOT
-# pre-installed (unlike DBR ML), and the HuggingFace Trainer needs torch +
-# accelerate — include them explicitly (this was the 'No module named torch' fail).
-%pip install -q torch accelerate transformers datasets evaluate vaderSentiment
+# Runs on a single-node GPU cluster with Databricks Runtime for ML (GPU), where
+# torch + transformers are PRE-INSTALLED — so we do NOT pip-install torch here
+# (installing a CPU torch over the runtime's GPU build breaks CUDA). We only add
+# the few small extras the ML runtime may not ship.
+%pip install -q evaluate vaderSentiment
 dbutils.library.restartPython()
 
 # COMMAND ----------

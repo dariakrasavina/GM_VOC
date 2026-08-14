@@ -41,6 +41,8 @@ DEFAULTS = {
     "freq_table": _NS + ".voc_classification_rule_frequencies",
     "date_start": "2025-07-01",
     "date_end": "2026-06-30",
+    # Optional row cap for quick test runs; 0 = full corpus (production default).
+    "sample_limit": "0",
 }
 
 JOIN_KEY = "natural_id"
@@ -94,17 +96,44 @@ def load_and_join(spark, params):
     sent = spark.table(params["sentence_table"])
     meta = spark.table(params["metadata_table"])
 
-    # Only keep metadata columns we actually need, aliased to avoid clashes.
+    # -----------------------------------------------------------------------
+    # PERFORMANCE: filter the SENTENCE table down to the in-scope population
+    # BEFORE the join and BEFORE the Python UDF. On a huge unpartitioned source
+    # this is the biggest win — the join and the (slow) UDF then only see the
+    # last-year, customer-side, English audio rows instead of the full corpus.
+    #
+    # Only the cheap, structural scope filters live here (language / id_source /
+    # verbatimtype / date). The engine's full in_scope() still runs in the UDF
+    # to apply the IVR/boilerplate NOT-lane exclusions, so results are identical
+    # — this SQL step just removes rows the engine would reject anyway.
+    # -----------------------------------------------------------------------
+    if "language" in sent.columns:
+        sent = sent.filter(F.lower(F.col("language")) == "english")
+    if "id_source" in sent.columns:
+        sent = sent.filter(F.lower(F.col("id_source")) == "audio")
+    if "verbatimtype" in sent.columns:
+        sent = sent.filter(F.lower(F.col("verbatimtype")) == "clientverbatim")
+
+    # Date range: compare the raw ISO-timestamp STRING directly (no to_date()
+    # wrapper) so the predicate can push down / prune. '2025-07-01' <= ts string
+    # works because ISO-8601 sorts lexicographically; pad the end bound to the
+    # end of the day so the whole end date is included.
+    if "document_date" in sent.columns:
+        sent = sent.filter(
+            (F.col("document_date") >= F.lit(params["date_start"])) &
+            (F.col("document_date") <= F.lit(params["date_end"] + "T23:59:59.999Z")))
+
+    # Optional cap for quick, cost-bounded test runs (0 / unset = full corpus).
+    limit = int(params.get("sample_limit") or 0)
+    if limit > 0:
+        sent = sent.limit(limit)
+
+    # Keep only the metadata columns the rules use, deduped on the join key.
     meta_cols = [JOIN_KEY] + [c for c in META_ATTRS if c in meta.columns]
     meta = meta.select(*meta_cols).dropDuplicates([JOIN_KEY])
 
-    df = sent.join(meta, on=JOIN_KEY, how="left")
-
-    # Date-range scoping on document_date (string ISO timestamp -> date).
-    if "document_date" in df.columns:
-        d = F.to_date(F.col("document_date"))
-        df = df.filter((d >= F.lit(params["date_start"])) & (d <= F.lit(params["date_end"])))
-    return df
+    # Join the now-small sentence set to metadata.
+    return sent.join(meta, on=JOIN_KEY, how="left")
 
 
 def make_tag_udf():

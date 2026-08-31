@@ -7,8 +7,13 @@ the deterministic rule engine (voc_topic_model_job.py).
 
 This is a genuinely different approach from the rule engine: instead of
 hand-maintained keyword rules, an LLM decides which categories a sentence
-belongs to, steered by each category's business definition. It also attaches
-sentiment (`ai_analyze_sentiment`).
+belongs to, steered by each category's business definition.
+
+COST / DEDUP:
+  ai_query only ever sees the sentence text (`words`), so identical sentences are
+  the same classification case. We classify each DISTINCT sentence once, then join
+  the tags back to every row that shares that text — same output row count, but you
+  pay per unique sentence, not per row (contact-center transcripts repeat heavily).
 
 MULTI-LABEL + ROLL-UP (matches XM Discover and the rule engine):
   A sentence can belong to *several* categories, so we ask the LLM (via
@@ -31,7 +36,6 @@ OUTPUT (Delta):
   <ai_tags_table>: one row per in-scope sentence with
     <category_id>        - 1/0 per category (leaves + rolled-up parents)
     ai_categories        - the raw category list the LLM returned
-    sentiment            - positive / negative / neutral / mixed
 """
 import json
 import os
@@ -47,8 +51,9 @@ DEFAULTS = {
     "sentence_table": _NS + ".qualtrics_audio_transcripts_sentence_level_sample_data",
     "metadata_table": _NS + ".qualtrics_audio_transcripts_metadata_sample_data",
     "ai_tags_table": _NS + ".voc_classification_ai_tags",
-    "date_start": "2025-07-01",
-    "date_end": "2026-06-30",
+    # AI track runs on a SINGLE calendar day, independent of the rule engine's
+    # window. The scope SQL matches to_date(document_date) == classify_date.
+    "classify_date": "2026-06-11",
     # LLM endpoint used for multi-label classification via ai_query.
     "classify_endpoint": "databricks-meta-llama-3-3-70b-instruct",
     # Cap rows for a cost-bounded POC run; set to 0 for the full corpus.
@@ -172,25 +177,36 @@ def run():
         WHERE lower(s.language) = 'english'
           AND lower(s.id_source) = 'audio'
           AND lower(s.verbatimtype) = 'clientverbatim'
-          AND to_date(s.document_date) BETWEEN '{ds}' AND '{de}'
+          AND to_date(s.document_date) = '{day}'
           AND s.{text} IS NOT NULL AND length(trim(s.{text})) > 0
         {limit}
     """.format(jk=JOIN_KEY, text=TEXT_FIELD, sent=params["sentence_table"],
-               ds=params["date_start"], de=params["date_end"], limit=limit_clause)
-    scoped = spark.sql(scoped_sql)
+               day=params["classify_date"], limit=limit_clause)
+    # Persist the in-scope rows once. This is the population we WRITE (every row
+    # keeps its own natural_id / metadata); with a LIMIT sample it also pins which
+    # rows were chosen so distinct + join see the same set.
+    scoped = spark.sql(scoped_sql).persist()
+    rows_total = scoped.count()
+
+    # DEDUP: the LLM only ever sees `words`, so two rows with identical text are
+    # the SAME classification case (no per-row metadata is fed to ai_query).
+    # Classify each DISTINCT sentence once, then fan the tags back out to every
+    # row that shares that text. This cuts cost (you pay per unique sentence, not
+    # per row) and makes duplicate rows consistent (ai_query is non-deterministic,
+    # so without dedup identical sentences could otherwise get different tags).
+    distinct_sentences = scoped.select("words").distinct()
 
     # MULTI-LABEL: ask the LLM (via ai_query) for the JSON array of ALL applicable
     # categories, so a sentence can carry several — matching the rule engine and
     # XM Discover. ai_query returns a STRING; parse it into an array<string>.
     endpoint = params["classify_endpoint"]
-    classified = (scoped
+    tagged_unique = (distinct_sentences
         .withColumn("_prompt", F.lit(prompt))
         .withColumn("ai_raw", F.expr(
             "CAST(ai_query('%s', concat(_prompt, words)) AS STRING)" % endpoint))
         .withColumn("ai_categories",
                     F.from_json(F.col("ai_raw"), ArrayType(StringType())))
-        .withColumn("sentiment", F.expr("CAST(ai_analyze_sentiment(words) AS STRING)"))
-        .drop("_prompt"))
+        .drop("_prompt", "ai_raw"))
 
     # Map returned category NAMES -> ids, drop anything unrecognized, then roll up
     # to ancestor categories (a Python UDF keeps the hierarchy logic in one place).
@@ -208,25 +224,38 @@ def run():
         return sorted(out)
 
     expand_udf = F.udf(expand_ids, ArrayType(StringType()))
-    classified = classified.withColumn("_matched_ids", expand_udf(F.col("ai_categories")))
+    tagged_unique = tagged_unique.withColumn("_matched_ids", expand_udf(F.col("ai_categories")))
 
     # One 0/1 column per category (leaves + rolled-up parents), same shape as the
     # rule engine's output so the comparison job is apples-to-apples.
     for cid in all_ids:
-        classified = classified.withColumn(
+        tagged_unique = tagged_unique.withColumn(
             cid, F.array_contains(F.col("_matched_ids"), cid).cast("int"))
 
-    result = classified.select(
-        "natural_id", "id_document", "id_verbatim", "document_date", "words",
-        "sentiment",
-        F.to_json(F.col("ai_categories")).alias("ai_categories"),
-        *all_ids)
+    # Per-sentence tag table used for the join back (one row per unique sentence).
+    tagged_unique = tagged_unique.select(
+        "words", F.to_json(F.col("ai_categories")).alias("ai_categories"), *all_ids)
+
+    # Materialize the LLM step EXACTLY ONCE. ai_query is paid + non-deterministic,
+    # so persist before the join/aggregation below — otherwise Spark would recompute
+    # (re-call) ai_query for each downstream action, doubling cost and desyncing tags.
+    tagged_unique = tagged_unique.persist()
+    unique_count = tagged_unique.count()
+    dup_pct = (100.0 * (rows_total - unique_count) / rows_total) if rows_total else 0.0
+    print("In-scope rows: %d | unique sentences classified: %d | duplicates skipped: %.1f%%"
+          % (rows_total, unique_count, dup_pct))
+
+    # Fan the per-sentence tags back out to ALL in-scope rows (unchanged output
+    # shape + row count), so the comparison job still lines up row-for-row.
+    result = (scoped.join(tagged_unique, on="words", how="left")
+              .select("natural_id", "id_document", "id_verbatim", "document_date",
+                      "words", "ai_categories", *all_ids))
 
     result.write.mode("overwrite").format("delta") \
         .option("overwriteSchema", "true").saveAsTable(params["ai_tags_table"])
 
     print("Wrote %s" % params["ai_tags_table"])
-    # Per-category hit counts (leaves + parents).
+    # Per-category hit counts (leaves + parents), across all in-scope rows.
     agg = result.agg(*[F.sum(F.col(cid)).alias(cid) for cid in all_ids]).collect()[0]
     for cid in all_ids:
         star = "*" if meta[cid]["is_target"] else " "

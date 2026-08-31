@@ -46,11 +46,16 @@ variables:
     description: Call-level metadata table (name only).
     default: qualtrics_audio_transcripts_metadata_sample_data
 
-  # Analysis window.
+  # Analysis window (rule engine + topic modeling).
   date_start:
     default: "2025-07-01"
   date_end:
     default: "2026-06-30"
+
+  # AI classify track runs on a SINGLE day, independent of the window above.
+  ai_classify_date:
+    description: Single calendar day the ai_classify track scores (YYYY-MM-DD).
+    default: "2026-06-11"
 
   # Cost controls (rows sent to paid AI functions per run; 0 = full corpus).
   ai_sample_limit:
@@ -146,10 +151,11 @@ resources:
               sentence_table: ${var.catalog}.${var.schema}.${var.sentence_table_name}
               metadata_table: ${var.catalog}.${var.schema}.${var.metadata_table_name}
               ai_tags_table: ${var.target_catalog}.${var.target_schema}.voc_classification_ai_tags
-              date_start: ${var.date_start}
-              date_end: ${var.date_end}
+              classify_date: ${var.ai_classify_date}
               classify_endpoint: ${var.classify_endpoint}
-              sample_limit: ${var.ai_sample_limit}
+              # 0 = classify ALL rows for the day (no cap). Every row is a paid
+              # ai_query call, so a full day can be a large number of LLM calls.
+              sample_limit: "0"
 
         - task_key: topic_modeling
           notebook_task:

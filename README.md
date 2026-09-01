@@ -116,13 +116,14 @@ Databricks and can be tested on a laptop.
 
 ## How it runs
 
-Four Databricks jobs (defined in `databricks.yml`):
+Five Databricks jobs (defined in `databricks.yml`):
 
 ```mermaid
 flowchart TB
     RE["voc_classification_rule_job<br/>rule-engine classification"]
-    AI["voc_classification_ai_job<br/>ai_classify + topic modeling"]
+    AI["voc_classification_ai_job<br/>ai_classify classification"]
     CMP["voc_classification_compare_job<br/>rule engine vs ai_classify"]
+    TM["voc_topic_modeling_job<br/>topic discovery (standalone)"]
     SENT["voc_sentiment_model_job<br/>train + score sentiment"]
 
     RE --> CMP
@@ -130,9 +131,10 @@ flowchart TB
 ```
 
 - **`voc_classification_rule_job`** → writes `voc_classification_rule_tags`
-- **`voc_classification_ai_job`** → writes `voc_classification_ai_tags` + discovered themes
+- **`voc_classification_ai_job`** → writes `voc_classification_ai_tags`
 - **`voc_classification_compare_job`** → reads both tag tables, writes the comparison
   (run it *after* the two above)
+- **`voc_topic_modeling_job`** → writes discovered themes (independent, exploratory)
 - **`voc_sentiment_model_job`** → trains + scores sentiment (independent)
 
 ### Run on Databricks
@@ -143,6 +145,7 @@ databricks bundle deploy -t sandbox -p <profile>
 databricks bundle run voc_classification_rule_job    -t sandbox -p <profile>
 databricks bundle run voc_classification_ai_job      -t sandbox -p <profile>
 databricks bundle run voc_classification_compare_job -t sandbox -p <profile>   # after the two above
+databricks bundle run voc_topic_modeling_job         -t sandbox -p <profile>   # independent
 databricks bundle run voc_sentiment_model_job        -t sandbox -p <profile>
 ```
 

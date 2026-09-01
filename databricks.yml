@@ -138,11 +138,11 @@ resources:
         enabled: true
 
     # ----------------------------------------------------------------------
-    # Classification (using ai_classify) + topic modeling.
+    # Classification (using ai_classify).
     # AI functions require serverless + DBR 18.2+.
     # ----------------------------------------------------------------------
     voc_classification_ai_job:
-      name: "[${bundle.target}] GM VOC Classification (ai_classify) + Topic Modeling"
+      name: "[${bundle.target}] GM VOC Classification (ai_classify)"
       tasks:
         - task_key: classify_ai
           notebook_task:
@@ -156,7 +156,17 @@ resources:
               # 0 = classify ALL rows for the day (no cap). Every row is a paid
               # ai_query call, so a full day can be a large number of LLM calls.
               sample_limit: "0"
+      queue:
+        enabled: true
 
+    # ----------------------------------------------------------------------
+    # Topic modeling — exploratory theme discovery (embeddings + clustering).
+    # Standalone job; independent of the ai_classify track.
+    # AI functions require serverless + DBR 18.2+.
+    # ----------------------------------------------------------------------
+    voc_topic_modeling_job:
+      name: "[${bundle.target}] GM VOC Topic Modeling"
+      tasks:
         - task_key: topic_modeling
           notebook_task:
             notebook_path: ./topic_modeling/run_topic_discovery_notebook.py
@@ -187,6 +197,8 @@ resources:
               rule_tags_table: ${var.target_catalog}.${var.target_schema}.voc_classification_rule_tags
               ai_tags_table: ${var.target_catalog}.${var.target_schema}.voc_classification_ai_tags
               comparison_table: ${var.target_catalog}.${var.target_schema}.voc_classification_comparison
+              # Same day as the ai_classify run so both tables line up.
+              compare_date: ${var.ai_classify_date}
       queue:
         enabled: true
 

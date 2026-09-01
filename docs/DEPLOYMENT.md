@@ -92,6 +92,7 @@ VARS="catalog=<CATALOG>,schema=<SCHEMA>,sentence_table_name=<SENTENCE_TABLE>,met
 databricks bundle run voc_classification_rule_job    -t client -p <client-profile> --var="$VARS"
 databricks bundle run voc_classification_ai_job      -t client -p <client-profile> --var="$VARS"
 databricks bundle run voc_classification_compare_job -t client -p <client-profile> --var="$VARS"   # after the two above
+databricks bundle run voc_topic_modeling_job         -t client -p <client-profile> --var="$VARS"   # independent
 databricks bundle run voc_sentiment_model_job        -t client -p <client-profile> --var="$VARS"
 ```
 

@@ -9,6 +9,10 @@ This is the POC's "show regression results against the current solution"
 deliverable, reframed for the AI track: it quantifies where the ML approach
 agrees with the rule-based control and surfaces the disagreements for SME review.
 
+Scoped to a SINGLE day (compare_date) so it lines up with the ai_classify track,
+which only classifies one day; the rule table spans the full year, so both are
+filtered to compare_date before the join.
+
 Per POC topic it reports, at the sentence grain (joined on id_verbatim):
   - rule_positives  : sentences the rule engine tagged for the topic
   - ai_positives    : sentences ai_classify assigned to the topic
@@ -34,6 +38,11 @@ DEFAULTS = {
     "rule_tags_table": _NS + ".voc_classification_rule_tags",
     "ai_tags_table": _NS + ".voc_classification_ai_tags",
     "comparison_table": _NS + ".voc_classification_comparison",
+    # Restrict the comparison to a single day so it is apples-to-apples: the AI
+    # track only classifies one day, while the rule table spans the full year.
+    # Set to the same day as the ai_classify run. Empty = compare whatever rows
+    # the two tables share (falls back to the id_verbatim intersection).
+    "compare_date": "2026-06-11",
 }
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
@@ -95,6 +104,20 @@ def run():
 
     rules = spark.table(params["rule_tags_table"])
     ai = spark.table(params["ai_tags_table"])
+
+    # Scope BOTH tables to the SAME single day so the comparison is apples-to-
+    # apples and fast. The AI track only classifies one day (compare_date); the
+    # rule table spans the full year. Filtering it down first avoids scanning the
+    # whole rule table just to intersect on the one day the AI table covers.
+    day = (params.get("compare_date") or "").strip()
+    if day:
+        if "document_date" in rules.columns:
+            rules = rules.filter(F.to_date(F.col("document_date")) == F.lit(day))
+        if "document_date" in ai.columns:
+            ai = ai.filter(F.to_date(F.col("document_date")) == F.lit(day))
+        print("Comparing on single day: %s" % day)
+    else:
+        print("compare_date empty; comparing the id_verbatim intersection of both tables")
 
     # Both tables now carry one 0/1 column per category (leaves + rolled-up
     # parents), so we can compare like-for-like per category on the shared

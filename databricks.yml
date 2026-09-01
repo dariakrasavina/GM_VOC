@@ -57,6 +57,18 @@ variables:
     description: Single calendar day the ai_classify track scores (YYYY-MM-DD).
     default: "2026-06-11"
 
+  # Distinct sentences the ai_classify track sends to the LLM. 0 = all for the
+  # day; set small (e.g. 10000) for a throughput-measurement / cost-preview run.
+  ai_classify_sample_limit:
+    description: Max distinct sentences to classify (0 = all).
+    default: "0"
+
+  # SQL warehouse for the DBSQL-batch ai_classify path (workspace-specific).
+  # Required only by voc_classification_ai_sql_job; leave empty otherwise.
+  sql_warehouse_id:
+    description: SQL warehouse id that runs the batch ai_query classification.
+    default: ""
+
   # Cost controls (rows sent to paid AI functions per run; 0 = full corpus).
   ai_sample_limit:
     default: "200"
@@ -153,9 +165,33 @@ resources:
               ai_tags_table: ${var.target_catalog}.${var.target_schema}.voc_classification_ai_tags
               classify_date: ${var.ai_classify_date}
               classify_endpoint: ${var.classify_endpoint}
-              # 0 = classify ALL rows for the day (no cap). Every row is a paid
-              # ai_query call, so a full day can be a large number of LLM calls.
-              sample_limit: "0"
+              # 0 = all distinct sentences for the day; set small to bound cost.
+              sample_limit: ${var.ai_classify_sample_limit}
+      queue:
+        enabled: true
+
+    # ----------------------------------------------------------------------
+    # Classification (ai_classify) via DBSQL BATCH INFERENCE.
+    # Runs the classification as set-based SQL (CREATE TABLE AS SELECT
+    # ai_query(...)) on a SQL WAREHOUSE, where ai_query batch inference drives
+    # much higher concurrency to the endpoint than the per-partition PySpark
+    # path above — the right approach for large single-day volumes.
+    # Requires sql_warehouse_id. Run with a small ai_classify_sample_limit first
+    # to measure throughput before a full-day run.
+    # ----------------------------------------------------------------------
+    voc_classification_ai_sql_job:
+      name: "[${bundle.target}] GM VOC Classification (ai_classify, DBSQL batch)"
+      tasks:
+        - task_key: classify_ai_sql
+          notebook_task:
+            notebook_path: ./classification_ai/run_ai_classify_sql_notebook.py
+            base_parameters:
+              sentence_table: ${var.catalog}.${var.schema}.${var.sentence_table_name}
+              ai_tags_table: ${var.target_catalog}.${var.target_schema}.voc_classification_ai_tags
+              classify_date: ${var.ai_classify_date}
+              classify_endpoint: ${var.classify_endpoint}
+              warehouse_id: ${var.sql_warehouse_id}
+              sample_limit: ${var.ai_classify_sample_limit}
       queue:
         enabled: true
 

@@ -136,9 +136,9 @@ def run():
             F.count("*").alias("n"),
             F.sum("rule_pos").alias("rule_pos"),
             F.sum("ai_pos").alias("ai_pos"),
-            F.sum((F.col("rule_pos") == 1) & (F.col("ai_pos") == 1)).cast("int").alias("both"),
-            F.sum((F.col("rule_pos") == 1) & (F.col("ai_pos") == 0)).cast("int").alias("rule_only"),
-            F.sum((F.col("rule_pos") == 0) & (F.col("ai_pos") == 1)).cast("int").alias("ai_only"),
+            F.sum(((F.col("rule_pos") == 1) & (F.col("ai_pos") == 1)).cast("int")).alias("both"),
+            F.sum(((F.col("rule_pos") == 1) & (F.col("ai_pos") == 0)).cast("int")).alias("rule_only"),
+            F.sum(((F.col("rule_pos") == 0) & (F.col("ai_pos") == 1)).cast("int")).alias("ai_only"),
         ).collect()[0]
 
         rule_positives = int(agg["rule_pos"] or 0)

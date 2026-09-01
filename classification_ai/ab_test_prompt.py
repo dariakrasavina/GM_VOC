@@ -33,6 +33,13 @@ Requires serverless compute + DBR 18.2+ + a Model-Serving region.
 import os
 import sys
 
+# Make this file's directory importable BEFORE importing the sibling module below,
+# so `import ai_classify_job` resolves from a notebook wrapper or any working
+# directory — not only when this file happens to be run directly as a script.
+HERE = os.path.dirname(os.path.abspath(__file__))
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+
 # Reuse the exact category loader + current prompt builder the real job uses, so
 # "cur" here is byte-identical to production.
 from ai_classify_job import build_prompt, load_categories
@@ -51,9 +58,6 @@ DEFAULTS = {
 }
 
 TEXT_FIELD = "words"
-HERE = os.path.dirname(os.path.abspath(__file__))
-if HERE not in sys.path:
-    sys.path.insert(0, HERE)
 
 # The candidate trimmed prompt (exactly what would go into build_prompt). It uses
 # the SAME category names as the model (required for name->id mapping); only the
@@ -165,12 +169,18 @@ def run():
     res = res.withColumn("ab_match", (F.col("trim_ids") == F.col("cur_ids")).cast("int"))
     res = res.withColumn("noise_match", (F.col("cur2_ids") == F.col("cur_ids")).cast("int"))
 
-    # Materialize once — ai_query is paid + non-deterministic; downstream actions
-    # must not re-trigger it.
-    res = res.persist()
+    # Materialize once. ai_query is paid + non-deterministic, so every downstream
+    # action (count, the agg loop, the detail write, show) must read a frozen copy
+    # rather than re-invoking the model. Serverless forbids .persist()/.cache(), so
+    # write to a temp Delta table and read it back (dropped at the end).
+    res_tmp = params["detail_table"] + "__tmp"
+    (res.write.mode("overwrite").format("delta")
+        .option("overwriteSchema", "true").saveAsTable(res_tmp))
+    res = spark.table(res_tmp)
     total = res.count()
     if total == 0:
         print("No in-scope sentences sampled for %s; nothing to compare." % day)
+        spark.sql("DROP TABLE IF EXISTS %s" % res_tmp)
         return
 
     sums = res.agg(F.sum("ab_match").alias("ab"),
@@ -222,6 +232,9 @@ def run():
     print("\nSample disagreements (trimmed != current):")
     (res.filter(F.col("ab_match") == 0)
         .select("words", "cur_ids", "trim_ids").show(20, truncate=False))
+
+    # Clean up the intermediate table (only needed during the run).
+    spark.sql("DROP TABLE IF EXISTS %s" % res_tmp)
 
 
 if __name__ == "__main__":

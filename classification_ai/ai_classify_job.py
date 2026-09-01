@@ -182,10 +182,21 @@ def run():
         {limit}
     """.format(jk=JOIN_KEY, text=TEXT_FIELD, sent=params["sentence_table"],
                day=params["classify_date"], limit=limit_clause)
-    # Persist the in-scope rows once. This is the population we WRITE (every row
-    # keeps its own natural_id / metadata); with a LIMIT sample it also pins which
-    # rows were chosen so distinct + join see the same set.
-    scoped = spark.sql(scoped_sql).persist()
+    ai_tags_table = params["ai_tags_table"]
+    # Serverless compute forbids .persist()/.cache() (NOT_SUPPORTED_WITH_SERVERLESS:
+    # PERSIST TABLE), so we materialize to intermediate Delta tables instead. Writing
+    # forces evaluation once; reading the table back is a plain scan that does NOT
+    # re-run ai_query.
+    scoped_tmp = ai_tags_table + "__scoped_tmp"
+    bysentence_tmp = ai_tags_table + "__bysentence_tmp"
+
+    # Materialize the in-scope population once. This is the set we WRITE (every row
+    # keeps its own natural_id / metadata). Materializing also (a) scans the (large)
+    # source table only once, and (b) pins the rows so distinct + join see the same
+    # set when a LIMIT sample is used.
+    (spark.sql(scoped_sql).write.mode("overwrite").format("delta")
+        .option("overwriteSchema", "true").saveAsTable(scoped_tmp))
+    scoped = spark.table(scoped_tmp)
     rows_total = scoped.count()
 
     # DEDUP: the LLM only ever sees `words`, so two rows with identical text are
@@ -236,10 +247,12 @@ def run():
     tagged_unique = tagged_unique.select(
         "words", F.to_json(F.col("ai_categories")).alias("ai_categories"), *all_ids)
 
-    # Materialize the LLM step EXACTLY ONCE. ai_query is paid + non-deterministic,
-    # so persist before the join/aggregation below — otherwise Spark would recompute
-    # (re-call) ai_query for each downstream action, doubling cost and desyncing tags.
-    tagged_unique = tagged_unique.persist()
+    # Materialize the LLM step EXACTLY ONCE (serverless-safe substitute for
+    # persist): writing runs ai_query once; the join below reads this table back
+    # instead of re-invoking the model, which is paid + non-deterministic.
+    (tagged_unique.write.mode("overwrite").format("delta")
+        .option("overwriteSchema", "true").saveAsTable(bysentence_tmp))
+    tagged_unique = spark.table(bysentence_tmp)
     unique_count = tagged_unique.count()
     dup_pct = (100.0 * (rows_total - unique_count) / rows_total) if rows_total else 0.0
     print("In-scope rows: %d | unique sentences classified: %d | duplicates skipped: %.1f%%"
@@ -252,14 +265,20 @@ def run():
                       "words", "ai_categories", *all_ids))
 
     result.write.mode("overwrite").format("delta") \
-        .option("overwriteSchema", "true").saveAsTable(params["ai_tags_table"])
+        .option("overwriteSchema", "true").saveAsTable(ai_tags_table)
+    print("Wrote %s" % ai_tags_table)
 
-    print("Wrote %s" % params["ai_tags_table"])
-    # Per-category hit counts (leaves + parents), across all in-scope rows.
-    agg = result.agg(*[F.sum(F.col(cid)).alias(cid) for cid in all_ids]).collect()[0]
+    # Per-category hit counts (leaves + parents). Read the written table back so the
+    # aggregation does not recompute the join.
+    written = spark.table(ai_tags_table)
+    agg = written.agg(*[F.sum(F.col(cid)).alias(cid) for cid in all_ids]).collect()[0]
     for cid in all_ids:
         star = "*" if meta[cid]["is_target"] else " "
         print("%s %-42s %s" % (star, meta[cid]["name"], agg[cid]))
+
+    # Clean up the intermediate tables (only needed during the run).
+    for _t in (bysentence_tmp, scoped_tmp):
+        spark.sql("DROP TABLE IF EXISTS %s" % _t)
 
 
 if __name__ == "__main__":

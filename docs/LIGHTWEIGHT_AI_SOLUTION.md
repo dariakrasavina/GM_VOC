@@ -9,7 +9,7 @@ Databricks AI functions — is the focus of this document.
 | # | Approach | Files | What it is | Strengths | Trade-offs |
 |---|----------|-------|-----------|-----------|-----------|
 | 1 | **Rule engine** | `rule_engine.py`, `tagger.py`, `voc_classification_rule_job.py` | Faithful re-implementation of GM's XM Discover swim-lane rules | Deterministic, explainable, zero model cost, exact control-set replica | Manual rule upkeep; misses novel phrasing; brittle to wording |
-| 2 | **AI classification** | `ai_classify_job.py` (`ai_classify` + `ai_analyze_sentiment`) | An LLM assigns each sentence to a topic, steered by the topic's business definition; sentiment attached | No keyword maintenance; handles paraphrase/synonyms; adds sentiment | Non-deterministic; per-call cost; needs validation vs. control |
+| 2 | **AI classification** | `ai_query_job.py` (`ai_classify` + `ai_analyze_sentiment`) | An LLM assigns each sentence to a topic, steered by the topic's business definition; sentiment attached | No keyword maintenance; handles paraphrase/synonyms; adds sentiment | Non-deterministic; per-call cost; needs validation vs. control |
 | 3 | **Topic discovery** | `topic_discovery_job.py` (embeddings + KMeans + `ai_gen`) | Unsupervised — embeds sentences, clusters by meaning, auto-names themes | Finds themes nobody defined (the "global other" problem); no labels needed | Clusters need human interpretation; not a 1:1 control replica |
 |   | **Comparison** | `compare_approaches_job.py` | Agreement analysis: rules vs. AI per topic | Quantifies overlap; surfaces AI misses & rule gaps for SME review | Uses rules as *proxy* ground truth, not GM's true control |
 
@@ -37,14 +37,14 @@ Approach 3 is the discovery capability rules can't provide.
 
 ## How the AI track works
 
-**AI classification (`ai_classify_job.py`)**
+**AI classification (`ai_query_job.py`)**
 1. Scope to English + audio + customer-side verbatims in the date range.
 2. `ai_classify(words, labels_json, options)` where `labels_json` maps each of
    the four POC topics (plus a "None of these" catch-all) to its business
    definition pulled from the *same* `category_model.json` the rule engine uses — so both
    tracks classify against identical topic definitions.
 3. `ai_analyze_sentiment(words)` adds positive/negative/neutral/mixed.
-4. Writes `voc_classification_ai_tags` (topic + confidence + sentiment per sentence).
+4. Writes `voc_classification_ai_query_tags` (topic + confidence + sentiment per sentence).
 
 **Topic discovery (`topic_discovery_job.py`)**
 1. Scope as above.
@@ -85,7 +85,7 @@ databricks bundle run voc_ai_pipeline_job -t sandbox -p daria_k_sandbox
 |-------|-------------|----------|
 | `voc_classification_rule_tags` | rules | per-sentence topic flags + matched terms |
 | `voc_classification_rule_frequencies` | rules | topic counts |
-| `voc_classification_ai_tags` | AI classify | per-sentence AI topic + confidence + sentiment |
+| `voc_classification_ai_query_tags` | AI classify | per-sentence AI topic + confidence + sentiment |
 | `voc_topicmodeling_themes` | discovery | emergent themes with names/summaries |
 | `voc_topicmodeling_assignments` | discovery | sentence → theme_id |
 | `voc_classification_comparison` | compare | rules-vs-AI agreement per topic |
@@ -93,7 +93,7 @@ databricks bundle run voc_ai_pipeline_job -t sandbox -p daria_k_sandbox
 ## Caveats to verify on first real run
 
 - The `ai_classify` v2.x return shape (struct vs. string) is runtime-sensitive;
-  `ai_classify_job.py` extracts defensively and falls back to raw output.
+  `ai_query_job.py` extracts defensively and falls back to raw output.
 - The embedding `ai_query` return (array vs. JSON envelope) should be checked on
   one row before scaling; a parse fallback is noted in `topic_discovery_job.py`.
 - Confirm the embedding/gen endpoint names exist in your workspace region.

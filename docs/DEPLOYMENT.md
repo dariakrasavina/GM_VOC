@@ -90,7 +90,7 @@ target_catalog=<OUT_CATALOG>,target_schema=<OUT_SCHEMA>"
 # run (order matters for the comparison) — pass the same --var on run
 VARS="catalog=<CATALOG>,schema=<SCHEMA>,sentence_table_name=<SENTENCE_TABLE>,metadata_table_name=<METADATA_TABLE>"
 databricks bundle run voc_classification_rule_job    -t client -p <client-profile> --var="$VARS"
-databricks bundle run voc_classification_ai_job      -t client -p <client-profile> --var="$VARS"
+databricks bundle run voc_classification_ai_query_job      -t client -p <client-profile> --var="$VARS"
 databricks bundle run voc_classification_compare_job -t client -p <client-profile> --var="$VARS"   # after the two above
 databricks bundle run voc_topic_modeling_job         -t client -p <client-profile> --var="$VARS"   # independent
 databricks bundle run voc_sentiment_model_job        -t client -p <client-profile> --var="$VARS"
@@ -125,7 +125,7 @@ print(d['resources']['jobs']['voc_classification_rule_job']['tasks'][0]['noteboo
   with `-t sandbox`. The two targets are independent.
 - Output tables created in the client schema:
   `voc_classification_rule_tags`, `voc_classification_rule_frequencies`,
-  `voc_classification_ai_tags`, `voc_topicmodeling_themes`,
+  `voc_classification_ai_query_tags`, `voc_topicmodeling_themes`,
   `voc_topicmodeling_assignments`, `voc_classification_comparison`,
   `voc_sentiment_weak_labels`, `voc_sentiment_scored`, plus the registered model
   `voc_sentiment_transformer`.

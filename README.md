@@ -121,7 +121,7 @@ Five Databricks jobs (defined in `databricks.yml`):
 ```mermaid
 flowchart TB
     RE["voc_classification_rule_job<br/>rule-engine classification"]
-    AI["voc_classification_ai_job<br/>ai_classify classification"]
+    AI["voc_classification_ai_query_job<br/>ai_query classification"]
     CMP["voc_classification_compare_job<br/>rule engine vs ai_classify"]
     TM["voc_topic_modeling_job<br/>topic discovery (standalone)"]
     SENT["voc_sentiment_model_job<br/>train + score sentiment"]
@@ -131,7 +131,7 @@ flowchart TB
 ```
 
 - **`voc_classification_rule_job`** → writes `voc_classification_rule_tags`
-- **`voc_classification_ai_job`** → writes `voc_classification_ai_tags`
+- **`voc_classification_ai_query_job`** → writes `voc_classification_ai_query_tags`
 - **`voc_classification_compare_job`** → reads both tag tables, writes the comparison
   (run it *after* the two above)
 - **`voc_topic_modeling_job`** → writes discovered themes (independent, exploratory)
@@ -143,7 +143,7 @@ flowchart TB
 databricks bundle deploy -t sandbox -p <profile>
 
 databricks bundle run voc_classification_rule_job    -t sandbox -p <profile>
-databricks bundle run voc_classification_ai_job      -t sandbox -p <profile>
+databricks bundle run voc_classification_ai_query_job      -t sandbox -p <profile>
 databricks bundle run voc_classification_compare_job -t sandbox -p <profile>   # after the two above
 databricks bundle run voc_topic_modeling_job         -t sandbox -p <profile>   # independent
 databricks bundle run voc_sentiment_model_job        -t sandbox -p <profile>
@@ -169,7 +169,7 @@ python3 classification_rule_engine/run_local.py \
 | Table | From | Contents |
 |-------|------|----------|
 | `voc_classification_rule_tags` | rule engine | one 0/1 column per category (leaves + rolled-up parents) + the words that assigned them |
-| `voc_classification_ai_tags` | ai_classify | one 0/1 column per category (multi-label + roll-up) + sentiment |
+| `voc_classification_ai_query_tags` | ai_classify | one 0/1 column per category (multi-label + roll-up) + sentiment |
 | `voc_topicmodeling_themes` / `voc_topicmodeling_assignments` | topic modeling | new themes found in the data |
 | `voc_classification_comparison` | compare | how much the two classifiers agree, per category |
 | `voc_sentiment_scored` | sentiment | sentiment per sentence (trained model + baseline) |

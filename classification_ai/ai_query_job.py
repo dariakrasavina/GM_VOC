@@ -1,5 +1,5 @@
 """
-ai_classify_job.py
+ai_query_job.py
 ------------------
 Lightweight AI-powered topic classification for the GM VOC POC using Databricks
 built-in AI functions — the "AI-assisted classification" track that complements
@@ -50,7 +50,7 @@ _NS = "%s.%s" % (CATALOG, SCHEMA)
 DEFAULTS = {
     "sentence_table": _NS + ".qualtrics_audio_transcripts_sentence_level_sample_data",
     "metadata_table": _NS + ".qualtrics_audio_transcripts_metadata_sample_data",
-    "ai_tags_table": _NS + ".voc_classification_ai_tags",
+    "ai_tags_table": _NS + ".voc_classification_ai_query_tags",
     # AI track runs on a SINGLE calendar day, independent of the rule engine's
     # window. The scope SQL matches to_date(document_date) == classify_date.
     "classify_date": "2026-06-11",

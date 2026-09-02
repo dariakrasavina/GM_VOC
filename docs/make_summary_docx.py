@@ -207,10 +207,10 @@ def build_body():
     b.append(para("6. Files — Classification (ai_classify) + Topic modeling", style="Heading1"))
     b.append(table([
         ("File", "Purpose"),
-        ("ai_classify_job.py",
+        ("ai_query_job.py",
          "AI topic classification. Uses ai_classify (LLM assigns each sentence "
          "to a topic, steered by the topic's business definition from category_model.json) "
-         "and ai_analyze_sentiment. Writes voc_classification_ai_tags."),
+         "and ai_analyze_sentiment. Writes voc_classification_ai_query_tags."),
         ("topic_discovery_job.py",
          "Unsupervised topic discovery. Embeds sentences via "
          "ai_query('databricks-gte-large-en'), clusters with scikit-learn KMeans "

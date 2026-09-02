@@ -1,7 +1,7 @@
 # Databricks notebook source
 # COMMAND ----------
-# GM VOC — rule-vs-AI agreement analysis entrypoint.
-# Reads voc_classification_rule_tags (rules) and voc_classification_ai_query_tags (AI); writes comparison.
+# GM VOC — AI classification entrypoint (ai_classify + ai_analyze_sentiment).
+# Requires serverless compute + DBR 18.2+.
 import os
 import sys
 
@@ -10,5 +10,5 @@ for cand in (os.getcwd(), "/Workspace" + os.getcwd()):
         sys.path.insert(0, cand)
 
 # COMMAND ----------
-import compare_approaches_job as job
+import ai_query_job as job
 job.run()

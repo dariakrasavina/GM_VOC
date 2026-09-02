@@ -1,7 +1,8 @@
 # Databricks notebook source
 # COMMAND ----------
-# GM VOC — AI classification entrypoint (ai_classify + ai_analyze_sentiment).
-# Requires serverless compute + DBR 18.2+.
+# GM VOC — ai_classify via the BUILT-IN ai_classify() function (single-label),
+# run as DBSQL batch on a SQL warehouse. Orchestrates only; the classification
+# runs on the warehouse. Requires a warehouse_id parameter.
 import os
 import sys
 
@@ -10,5 +11,5 @@ for cand in (os.getcwd(), "/Workspace" + os.getcwd()):
         sys.path.insert(0, cand)
 
 # COMMAND ----------
-import ai_classify_job as job
+import ai_classify as job
 job.run()

@@ -1,10 +1,10 @@
 """
-ai_classify_sql.py
+ai_query_sql.py
 ------------------
 DBSQL batch-inference version of the ai_classify track.
 
-WHY THIS EXISTS (vs. ai_classify_job.py):
-  ai_classify_job.py calls ai_query row-by-row via a PySpark DataFrame on
+WHY THIS EXISTS (vs. ai_query_job.py):
+  ai_query_job.py calls ai_query row-by-row via a PySpark DataFrame on
   *serverless compute*. Its concurrency is bounded by the number of Spark
   partitions, so a scope that lands in a few files (e.g. 4) issues only a few
   ai_query calls at a time and crawls on million-row days.
@@ -49,12 +49,12 @@ _NS = "%s.%s" % (CATALOG, SCHEMA)
 
 DEFAULTS = {
     "sentence_table": _NS + ".qualtrics_audio_transcripts_sentence_level_sample_data",
-    "ai_tags_table": _NS + ".voc_classification_ai_tags",
+    "ai_tags_table": _NS + ".voc_classification_ai_query_sql_tags",
     # AI track runs on a SINGLE calendar day (empty = no date filter).
     "classify_date": "2026-06-11",
     "classify_endpoint": "databricks-meta-llama-3-3-70b-instruct",
-    # 0 = all distinct sentences for the day. Set small (e.g. 10000) for a
-    # throughput-measurement / cost-preview run first.
+    # Number of distinct sentences to classify, taken MOST-FREQUENT-FIRST so a
+    # partial run covers the largest share of the day's rows. 0 = all distinct.
     "sample_limit": "0",
     # REQUIRED for run(): the SQL warehouse that executes the batch SQL.
     "warehouse_id": "",
@@ -67,7 +67,7 @@ if HERE not in sys.path:
 
 # Reuse the exact prompt + category model the PySpark job uses, so results are
 # comparable across the two implementations.
-from ai_classify_job import build_prompt, load_categories
+from ai_query_job import build_prompt, load_categories
 
 
 def _trigger_names():
@@ -125,12 +125,19 @@ def build_statements(params):
 
     # The paid step: one ai_query per DISTINCT sentence. Set-based so the SQL
     # warehouse's batch inference drives concurrency to the endpoint.
+    #
+    # FREQUENCY-PRIORITIZED: order distinct sentences by how many rows they cover
+    # (count DESC) and classify the top ones first. With sample_limit = N this
+    # tags the LARGEST share of the day's rows for N LLM calls (contact-center
+    # text is skewed — a few common sentences cover many rows). limit = 0 still
+    # classifies every distinct sentence (the ORDER BY is then just harmless).
     s_bysentence = (
         "CREATE OR REPLACE TABLE %s AS "
         "SELECT %s, from_json(CAST(ai_query('%s', concat(:prompt, %s)) AS STRING), "
         "'array<string>') AS ai_categories "
-        "FROM (SELECT DISTINCT %s FROM %s %s)"
-        % (bysentence_tmp, TEXT_FIELD, ep, TEXT_FIELD, TEXT_FIELD, scoped_tmp, lim))
+        "FROM (SELECT %s FROM %s GROUP BY %s ORDER BY count(*) DESC %s)"
+        % (bysentence_tmp, TEXT_FIELD, ep, TEXT_FIELD, TEXT_FIELD, scoped_tmp,
+           TEXT_FIELD, lim))
 
     col_exprs = []
     for cid, names in cols:

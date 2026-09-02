@@ -14,5 +14,5 @@ for cand in (os.getcwd(), "/Workspace" + os.getcwd()):
         sys.path.insert(0, cand)
 
 # COMMAND ----------
-import ai_classify_sql as job
+import ai_query_sql as job
 job.run()

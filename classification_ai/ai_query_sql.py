@@ -53,9 +53,21 @@ DEFAULTS = {
     # AI track runs on a SINGLE calendar day (empty = no date filter).
     "classify_date": "2026-06-11",
     "classify_endpoint": "databricks-meta-llama-3-3-70b-instruct",
-    # Number of distinct sentences to classify, taken MOST-FREQUENT-FIRST so a
-    # partial run covers the largest share of the day's rows. 0 = all distinct.
+    # Number of sentences to classify. 0 = all.
     "sample_limit": "0",
+    # QUALITY KNOBS (added to fix over-tagging of short filler on real data):
+    # min_words   - drop sentences with fewer than N words before classifying
+    #               (0 = off). Removes 1-2 word filler like "What?" / "Huh.".
+    # sample_mode - "frequency" (top-N most-common, max row coverage) or
+    #               "random" (representative sample for a fair QUALITY read;
+    #               frequency-first over-samples short filler).
+    # context_window - 0 = classify each DISTINCT sentence once (dedup, cheap).
+    #               N>0 = classify each ROW with +/-N neighbor sentences from the
+    #               same call as context (NO dedup -> more calls; for small
+    #               quality-eval samples, not full-day scale).
+    "min_words": "0",
+    "sample_mode": "frequency",
+    "context_window": "0",
     # REQUIRED for run(): the SQL warehouse that executes the batch SQL.
     "warehouse_id": "",
 }
@@ -109,61 +121,96 @@ def build_statements(params):
     day = (params.get("classify_date") or "").strip()
     if day:
         where += " AND to_date(document_date) = '%s'" % day
+    # (2) content pre-filter: drop sentences shorter than min_words words.
+    min_words = int(params.get("min_words") or 0)
+    if min_words > 0:
+        where += " AND size(split(trim(%s), ' ')) >= %d" % (TEXT_FIELD, min_words)
     limit = int(params.get("sample_limit") or 0)
     lim = ("LIMIT %d" % limit) if limit > 0 else ""
+    sample_mode = (params.get("sample_mode") or "frequency").strip().lower()
+    ctx_n = int(params.get("context_window") or 0)
 
     ep = params["classify_endpoint"]
     sent = params["sentence_table"]
     tags = params["ai_tags_table"]
     scoped_tmp = tags + "__scoped_tmp"
-    bysentence_tmp = tags + "__bysentence_tmp"
 
     s_scoped = (
         "CREATE OR REPLACE TABLE %s AS "
         "SELECT natural_id, id_document, id_verbatim, document_date, %s "
         "FROM %s WHERE %s" % (scoped_tmp, TEXT_FIELD, sent, where))
 
-    # The paid step: one ai_query per DISTINCT sentence. Set-based so the SQL
-    # warehouse's batch inference drives concurrency to the endpoint.
-    #
-    # FREQUENCY-PRIORITIZED: order distinct sentences by how many rows they cover
-    # (count DESC) and classify the top ones first. With sample_limit = N this
-    # tags the LARGEST share of the day's rows for N LLM calls (contact-center
-    # text is skewed — a few common sentences cover many rows). limit = 0 still
-    # classifies every distinct sentence (the ORDER BY is then just harmless).
+    # Per-category 0/1 columns (roll-up compiled to arrays_overlap), aliased to
+    # whichever table holds ai_categories.
+    def _col_exprs(alias):
+        out = []
+        for cid, names in cols:
+            arr = _sql_array(names)
+            if arr:
+                out.append("CASE WHEN arrays_overlap(%s.ai_categories, %s) "
+                           "THEN 1 ELSE 0 END AS `%s`" % (alias, arr, cid))
+            else:
+                out.append("CAST(0 AS INT) AS `%s`" % cid)
+        return ", ".join(out)
+
+    if ctx_n > 0:
+        # (4) CONTEXT MODE: classify each ROW with +/-ctx_n neighbor sentences from
+        # the same call as context. No dedup (context makes rows distinct), so this
+        # is for small quality-eval samples, not full-day scale. sample_mode=random
+        # gives a representative sample; frequency doesn't apply per-row.
+        byrow_tmp = tags + "__byrow_tmp"
+        win = "PARTITION BY id_verbatim ORDER BY document_date"
+        parts = ["lag(%s, %d) OVER (%s)" % (TEXT_FIELD, i, win) for i in range(ctx_n, 0, -1)]
+        parts += ["'>>>'", TEXT_FIELD, "'<<<'"]
+        parts += ["lead(%s, %d) OVER (%s)" % (TEXT_FIELD, i, win) for i in range(1, ctx_n + 1)]
+        ctx_expr = "concat_ws(' ', %s)" % ", ".join(parts)
+        order = "ORDER BY rand()" if sample_mode == "random" else ""
+        s_bysentence = (
+            "CREATE OR REPLACE TABLE %s AS "
+            "SELECT natural_id, id_document, id_verbatim, document_date, %s, "
+            "from_json(CAST(ai_query('%s', concat(:prompt, ctx)) AS STRING), "
+            "'array<string>') AS ai_categories "
+            "FROM (SELECT natural_id, id_document, id_verbatim, document_date, %s, "
+            "%s AS ctx FROM %s %s %s)"
+            % (byrow_tmp, TEXT_FIELD, ep, TEXT_FIELD, ctx_expr, scoped_tmp, order, lim))
+        s_final = (
+            "CREATE OR REPLACE TABLE %s AS "
+            "SELECT b.natural_id, b.id_document, b.id_verbatim, b.document_date, b.%s, "
+            "to_json(b.ai_categories) AS ai_categories, %s FROM %s b"
+            % (tags, TEXT_FIELD, _col_exprs("b"), byrow_tmp))
+        drops = ["DROP TABLE IF EXISTS %s" % byrow_tmp,
+                 "DROP TABLE IF EXISTS %s" % scoped_tmp]
+        return {"prompt": prompt, "scoped": s_scoped, "bysentence": s_bysentence,
+                "final": s_final, "drops": drops}
+
+    # DEDUP MODE: one ai_query per DISTINCT sentence, then fan the tag back to all
+    # rows that share it. Set-based so the warehouse's batch inference drives
+    # concurrency. (3) sample_mode selects which distinct sentences:
+    #   frequency -> most-common first (max row coverage per call)
+    #   random    -> representative sample (fair quality read)
+    bysentence_tmp = tags + "__bysentence_tmp"
+    if sample_mode == "random":
+        inner = ("SELECT %s FROM (SELECT DISTINCT %s FROM %s) ORDER BY rand() %s"
+                 % (TEXT_FIELD, TEXT_FIELD, scoped_tmp, lim))
+    else:
+        inner = ("SELECT %s FROM %s GROUP BY %s ORDER BY count(*) DESC %s"
+                 % (TEXT_FIELD, scoped_tmp, TEXT_FIELD, lim))
     s_bysentence = (
         "CREATE OR REPLACE TABLE %s AS "
         "SELECT %s, from_json(CAST(ai_query('%s', concat(:prompt, %s)) AS STRING), "
-        "'array<string>') AS ai_categories "
-        "FROM (SELECT %s FROM %s GROUP BY %s ORDER BY count(*) DESC %s)"
-        % (bysentence_tmp, TEXT_FIELD, ep, TEXT_FIELD, TEXT_FIELD, scoped_tmp,
-           TEXT_FIELD, lim))
-
-    col_exprs = []
-    for cid, names in cols:
-        arr = _sql_array(names)
-        if arr:
-            col_exprs.append(
-                "CASE WHEN arrays_overlap(b.ai_categories, %s) THEN 1 ELSE 0 END AS `%s`"
-                % (arr, cid))
-        else:                                   # no target descendant -> always 0
-            col_exprs.append("CAST(0 AS INT) AS `%s`" % cid)
-
-    # Fan the per-sentence tags back to ALL in-scope rows (INNER join keeps the
-    # run consistent when sample_limit < full: only classified sentences appear).
+        "'array<string>') AS ai_categories FROM (%s)"
+        % (bysentence_tmp, TEXT_FIELD, ep, TEXT_FIELD, inner))
     s_final = (
         "CREATE OR REPLACE TABLE %s AS "
         "SELECT s.natural_id, s.id_document, s.id_verbatim, s.document_date, s.%s, "
         "to_json(b.ai_categories) AS ai_categories, %s "
         "FROM %s s JOIN %s b ON s.%s = b.%s"
-        % (tags, TEXT_FIELD, ", ".join(col_exprs),
+        % (tags, TEXT_FIELD, _col_exprs("b"),
            scoped_tmp, bysentence_tmp, TEXT_FIELD, TEXT_FIELD))
-
     drops = ["DROP TABLE IF EXISTS %s" % bysentence_tmp,
              "DROP TABLE IF EXISTS %s" % scoped_tmp]
     return {"prompt": prompt, "scoped": s_scoped, "bysentence": s_bysentence,
-            "final": s_final, "drops": drops,
-            "scoped_tmp": scoped_tmp, "bysentence_tmp": bysentence_tmp}
+            "final": s_final, "drops": drops}
 
 
 def get_params():

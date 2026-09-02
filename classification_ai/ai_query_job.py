@@ -142,15 +142,32 @@ def load_categories(rules_path=None):
 
 def build_prompt(target_labels):
     """Multi-label classification prompt: return ALL applicable categories as a
-    JSON array (empty if none). Category definitions steer the choice."""
-    lines = ["You are labeling a customer's sentence from a call transcript.",
-             "Choose ALL categories that clearly apply (a sentence may match "
-             "several, or none). Categories and their definitions:"]
+    JSON array (empty if none), with strict guidance AGAINST tagging filler.
+
+    Tightened to fix heavy over-tagging observed on real data — short generic
+    utterances ("What?", "Huh.", "Get what?") were being labeled
+    "Confusing/Makes No Sense". Most sentences should return []."""
+    lines = [
+        "You label a customer's sentence from a call-center transcript.",
+        "Assign a category ONLY when the sentence CLEARLY and EXPLICITLY expresses "
+        "it. MOST sentences match nothing — return [] for greetings, small talk, "
+        "back-channel, acknowledgments, and generic or short clarifying questions "
+        "(e.g. 'What?', 'Huh?', 'Pardon me?', 'Get what?', 'I don't know.', "
+        "'Okay.', 'Um.'). Those are NOT categories.",
+        "Do NOT tag 'CC Advisor - Confusing/Makes No Sense' merely because the "
+        "customer asks a question or sounds unsure — tag it ONLY when the customer "
+        "explicitly says the advisor, information, or instructions were confusing "
+        "or made no sense.",
+        "If surrounding conversation is shown for context, classify ONLY the "
+        "sentence marked between >>> and <<<; if no markers are present, classify "
+        "the whole text.",
+        "Categories and their definitions:",
+    ]
     for name, desc in target_labels.items():
         lines.append("- %s: %s" % (name, desc))
     lines.append("Reply with ONLY a JSON array of the exact category names that "
-                 "apply, e.g. [\"Loyalty Rewards - Points\"]. If none apply, "
-                 "reply []. Sentence: ")
+                 "clearly apply, e.g. [\"Loyalty Rewards - Points\"]. If none "
+                 "apply, reply []. Text: ")
     return " ".join(lines)
 
 

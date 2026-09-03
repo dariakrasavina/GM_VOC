@@ -44,6 +44,12 @@ variables:
   rule_freq_table_name:
     default: voc_classification_rule_frequencies
 
+  # ai_classify (v2.1, multi-label) output table name (name only; catalog/schema
+  # prepended). Override to write a test run to a SEPARATE table. NOTE: must be a
+  # valid identifier — NO dots (the job appends __scoped_tmp / __bysentence_tmp).
+  ai_classify_tags_table_name:
+    default: voc_classification_ai_classify_tags
+
   # Input tables (names only — the catalog/schema are prepended automatically).
   # Override these if the client's source tables are named differently.
   sentence_table_name:
@@ -83,8 +89,10 @@ variables:
   # classifies each row with N neighbor sentences as context (no dedup).
   min_words:
     default: "0"
+  # "random" (default; representative) or "frequency" (max row coverage for a
+  # capped production run). Moot when the sample limit is 0 (all distinct scored).
   sample_mode:
-    default: "frequency"
+    default: "random"
   context_window:
     default: "0"
   # Optional hour-of-day window within classify_date (both empty = whole day;
@@ -199,27 +207,6 @@ resources:
         enabled: true
 
     # ----------------------------------------------------------------------
-    # Classification (using ai_query, PySpark).
-    # AI functions require serverless + DBR 18.2+.
-    # ----------------------------------------------------------------------
-    voc_classification_ai_query_job:
-      name: "[${bundle.target}] GM VOC Classification (ai_query)"
-      tasks:
-        - task_key: classify_ai_query
-          notebook_task:
-            notebook_path: ./classification_ai/run_ai_query_notebook.py
-            base_parameters:
-              sentence_table: ${var.catalog}.${var.schema}.${var.sentence_table_name}
-              metadata_table: ${var.catalog}.${var.schema}.${var.metadata_table_name}
-              ai_tags_table: ${var.target_catalog}.${var.target_schema}.voc_classification_ai_query_tags
-              classify_date: ${var.ai_classify_date}
-              classify_endpoint: ${var.classify_endpoint}
-              # 0 = all distinct sentences for the day; set small to bound cost.
-              sample_limit: ${var.ai_classify_sample_limit}
-      queue:
-        enabled: true
-
-    # ----------------------------------------------------------------------
     # Classification (ai_query) via DBSQL BATCH INFERENCE.
     # Runs the classification as set-based SQL (CREATE TABLE AS SELECT
     # ai_query(...)) on a SQL WAREHOUSE, where ai_query batch inference drives
@@ -250,26 +237,27 @@ resources:
         enabled: true
 
     # ----------------------------------------------------------------------
-    # Classification (ai_classify) via the BUILT-IN ai_classify() function.
-    # SINGLE-label: tags each sentence with ONE of the 4 categories where it
-    # applies (plus an explicit "None of the above" opt-out), then rolls up to
-    # parents. Different classification METHOD from the ai_query jobs above
-    # (no prompt / definitions); same DBSQL-batch execution + output shape.
-    # Writes a SEPARATE table so all approaches can be compared. Requires
-    # sql_warehouse_id. NOTE: same model backend => same throughput ceiling.
+    # Classification (ai_classify) via the BUILT-IN ai_classify() function, v2.1.
+    # MULTI-label with label descriptions + confidence: tags each sentence with ALL
+    # applicable categories (a sentence that matches nothing returns none), then
+    # rolls up to parents. Different classification METHOD from the ai_query jobs
+    # above (task-specific function, fixed managed model — no model choice); same
+    # DBSQL-batch execution + output shape. Writes a SEPARATE table so all
+    # approaches can be compared. Requires sql_warehouse_id.
     # ----------------------------------------------------------------------
     voc_classification_ai_classify_job:
-      name: "[${bundle.target}] GM VOC Classification (ai_classify, single-label)"
+      name: "[${bundle.target}] GM VOC Classification (ai_classify v2.1, multi-label)"
       tasks:
         - task_key: classify_ai_classify
           notebook_task:
             notebook_path: ./classification_ai/run_ai_classify_notebook.py
             base_parameters:
               sentence_table: ${var.catalog}.${var.schema}.${var.sentence_table_name}
-              ai_tags_table: ${var.target_catalog}.${var.target_schema}.voc_classification_ai_classify_tags
+              ai_tags_table: ${var.target_catalog}.${var.target_schema}.${var.ai_classify_tags_table_name}
               classify_date: ${var.ai_classify_date}
               warehouse_id: ${var.sql_warehouse_id}
               sample_limit: ${var.ai_classify_sample_limit}
+              sample_mode: ${var.sample_mode}
               min_words: ${var.min_words}
               hour_start: ${var.hour_start}
               hour_end: ${var.hour_end}
@@ -301,18 +289,20 @@ resources:
         enabled: true
 
     # ----------------------------------------------------------------------
-    # Comparison — Classification (rule engine) vs. Classification (ai_classify).
+    # Comparison — Classification (rule engine) vs. AI classification.
     # Standalone job: run it AFTER both classification jobs have produced tags.
+    # Defaults to comparing the ai_query (DBSQL batch) table; point ai_tags_table
+    # at voc_classification_ai_classify_tags to compare that one instead.
     # ----------------------------------------------------------------------
     voc_classification_compare_job:
-      name: "[${bundle.target}] GM VOC Classification Compare (rule engine vs ai_classify)"
+      name: "[${bundle.target}] GM VOC Classification Compare (rule engine vs AI)"
       tasks:
         - task_key: compare_classification
           notebook_task:
             notebook_path: ./classification_ai/run_compare_notebook.py
             base_parameters:
               rule_tags_table: ${var.target_catalog}.${var.target_schema}.voc_classification_rule_tags
-              ai_tags_table: ${var.target_catalog}.${var.target_schema}.voc_classification_ai_query_tags
+              ai_tags_table: ${var.target_catalog}.${var.target_schema}.voc_classification_ai_query_sql_tags
               comparison_table: ${var.target_catalog}.${var.target_schema}.voc_classification_comparison
               # Same day as the ai_classify run so both tables line up.
               compare_date: ${var.ai_classify_date}

@@ -1,13 +1,13 @@
 """
 ai_query_sql.py
 ------------------
-DBSQL batch-inference version of the ai_classify track.
+DBSQL batch-inference version of the ai_query classification track.
 
-WHY THIS EXISTS (vs. ai_query_job.py):
-  ai_query_job.py calls ai_query row-by-row via a PySpark DataFrame on
-  *serverless compute*. Its concurrency is bounded by the number of Spark
-  partitions, so a scope that lands in a few files (e.g. 4) issues only a few
-  ai_query calls at a time and crawls on million-row days.
+WHY BATCH SQL (vs. a per-partition PySpark approach):
+  Calling ai_query row-by-row via a PySpark DataFrame on serverless compute
+  bounds concurrency by the number of Spark partitions, so a scope that lands in
+  a few files issues only a few ai_query calls at a time and crawls on
+  million-row days.
 
   This module instead runs the classification as SET-BASED SQL
   (CREATE TABLE AS SELECT ai_query(...)) on a SQL WAREHOUSE, where Databricks'
@@ -63,15 +63,16 @@ DEFAULTS = {
     # QUALITY KNOBS (added to fix over-tagging of short filler on real data):
     # min_words   - drop sentences with fewer than N words before classifying
     #               (0 = off). Removes 1-2 word filler like "What?" / "Huh.".
-    # sample_mode - "frequency" (top-N most-common, max row coverage) or
-    #               "random" (representative sample for a fair QUALITY read;
-    #               frequency-first over-samples short filler).
+    # sample_mode - "random" (default; representative sample for a fair read) or
+    #               "frequency" (top-N most-common = max row coverage for a capped
+    #               PRODUCTION run; over-samples short filler, so not for eval).
+    #               Moot when sample_limit=0 (all distinct sentences classified).
     # context_window - 0 = classify each DISTINCT sentence once (dedup, cheap).
     #               N>0 = classify each ROW with +/-N neighbor sentences from the
     #               same call as context (NO dedup -> more calls; for small
     #               quality-eval samples, not full-day scale).
     "min_words": "0",
-    "sample_mode": "frequency",
+    "sample_mode": "random",
     "context_window": "0",
     # REQUIRED for run(): the SQL warehouse that executes the batch SQL.
     "warehouse_id": "",
@@ -84,7 +85,7 @@ if HERE not in sys.path:
 
 # Reuse the exact prompt + category model the PySpark job uses, so results are
 # comparable across the two implementations.
-from ai_query_job import build_prompt, load_categories
+from ai_common import build_prompt, load_categories
 
 
 def _trigger_names():

@@ -1,8 +1,9 @@
 # Databricks notebook source
 # COMMAND ----------
-# GM VOC — ai_classify via the BUILT-IN ai_classify() function (single-label),
-# run as DBSQL batch on a SQL warehouse. Orchestrates only; the classification
-# runs on the warehouse. Requires a warehouse_id parameter.
+# GM VOC — ai_classify via the BUILT-IN ai_classify() function (v2.1: multi-label
+# + label descriptions + confidence), run as DBSQL batch on a SQL warehouse.
+# Orchestrates only; the classification runs on the warehouse. Requires a
+# warehouse_id parameter.
 import os
 import sys
 

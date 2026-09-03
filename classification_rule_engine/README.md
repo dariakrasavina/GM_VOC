@@ -9,6 +9,11 @@ explainable (you can see which words triggered each tag).
 evaluator for GM's rule syntax. It is also the **control** the AI track is
 compared against.
 
+> **Visual walkthrough:** the architecture (data → engine → consumers), the 4-lane
+> match logic, the full job pipeline, and the incremental re-tag flow are all
+> diagrammed in the deep-dive deck — `GM_VOC_Technical_Deep_Dive.pptx`, generated
+> by `docs/make_deepdive_pptx.py`.
+
 ---
 
 ## How the pieces fit together

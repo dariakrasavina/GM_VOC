@@ -2,8 +2,9 @@
 compare_approaches_job.py
 -------------------------
 Regression / agreement analysis between the two classification tracks:
-  A) rule engine   -> voc_classification_rule_tags        (deterministic XM Discover replica)
-  B) AI classifier -> voc_classification_ai_query_tags      (LLM via ai_classify)
+  A) rule engine   -> voc_classification_rule_tags          (deterministic XM Discover replica)
+  B) AI classifier -> voc_classification_ai_query_sql_tags   (ai_query, DBSQL batch;
+                      point at voc_classification_ai_classify_tags to compare that one)
 
 This is the POC's "show regression results against the current solution"
 deliverable, reframed for the AI track: it quantifies where the ML approach
@@ -36,7 +37,7 @@ _NS = "%s.%s" % (CATALOG, SCHEMA)
 
 DEFAULTS = {
     "rule_tags_table": _NS + ".voc_classification_rule_tags",
-    "ai_tags_table": _NS + ".voc_classification_ai_query_tags",
+    "ai_tags_table": _NS + ".voc_classification_ai_query_sql_tags",
     "comparison_table": _NS + ".voc_classification_comparison",
     # Restrict the comparison to a single day so it is apples-to-apples: the AI
     # track only classifies one day, while the rule table spans the full year.

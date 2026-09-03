@@ -1,7 +1,7 @@
 # Databricks notebook source
 # COMMAND ----------
 # GM VOC — rule-vs-AI agreement analysis entrypoint.
-# Reads voc_classification_rule_tags (rules) and voc_classification_ai_query_tags (AI); writes comparison.
+# Reads voc_classification_rule_tags (rules) and voc_classification_ai_query_sql_tags (AI); writes comparison.
 import os
 import sys
 

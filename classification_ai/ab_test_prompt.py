@@ -34,15 +34,15 @@ import os
 import sys
 
 # Make this file's directory importable BEFORE importing the sibling module below,
-# so `import ai_query_job` resolves from a notebook wrapper or any working
-# directory — not only when this file happens to be run directly as a script.
+# so `import ai_common` resolves from a notebook wrapper or any working directory —
+# not only when this file happens to be run directly as a script.
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 # Reuse the exact category loader + current prompt builder the real job uses, so
 # "cur" here is byte-identical to production.
-from ai_query_job import build_prompt, load_categories
+from ai_common import build_prompt, load_categories
 
 CATALOG = "daria_krasavina"
 SCHEMA = "gm_voc"

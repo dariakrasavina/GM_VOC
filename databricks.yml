@@ -37,6 +37,13 @@ variables:
     description: Schema for output tables. Defaults to the source schema.
     default: ${var.schema}
 
+  # Rule-engine output table names (override to write a re-run to a NEW table
+  # instead of overwriting the existing one). Names only; catalog/schema prepended.
+  rule_tags_table_name:
+    default: voc_classification_rule_tags
+  rule_freq_table_name:
+    default: voc_classification_rule_frequencies
+
   # Input tables (names only — the catalog/schema are prepended automatically).
   # Override these if the client's source tables are named differently.
   sentence_table_name:
@@ -80,6 +87,12 @@ variables:
     default: "frequency"
   context_window:
     default: "0"
+  # Optional hour-of-day window within classify_date (both empty = whole day;
+  # hour_end exclusive). e.g. hour_start=9, hour_end=12 -> 09:00:00-11:59:59.
+  hour_start:
+    default: ""
+  hour_end:
+    default: ""
 
   # Cost controls (rows sent to paid AI functions per run; 0 = full corpus).
   ai_sample_limit:
@@ -90,7 +103,7 @@ variables:
   # Foundation-model / AI-function endpoints. Verify these exist in the target
   # workspace's region (names can differ by region / availability).
   classify_endpoint:
-    default: databricks-meta-llama-3-3-70b-instruct
+    default: databricks-claude-sonnet-4-6
   gen_endpoint:
     default: databricks-meta-llama-3-3-70b-instruct
   embedding_endpoint:
@@ -154,10 +167,34 @@ resources:
             base_parameters:
               sentence_table: ${var.catalog}.${var.schema}.${var.sentence_table_name}
               metadata_table: ${var.catalog}.${var.schema}.${var.metadata_table_name}
-              tags_table: ${var.target_catalog}.${var.target_schema}.voc_classification_rule_tags
-              freq_table: ${var.target_catalog}.${var.target_schema}.voc_classification_rule_frequencies
+              tags_table: ${var.target_catalog}.${var.target_schema}.${var.rule_tags_table_name}
+              freq_table: ${var.target_catalog}.${var.target_schema}.${var.rule_freq_table_name}
               date_start: ${var.date_start}
               date_end: ${var.date_end}
+      queue:
+        enabled: true
+
+    # ----------------------------------------------------------------------
+    # Classification (rule engine) — INCREMENTAL re-tag after a rule change.
+    # Diffs category_model.json vs the rules snapshot and re-tags ONLY the
+    # affected columns on the affected sentences, MERGEing in place — instead of
+    # the hours-long full re-run. First run seeds the snapshot (run the full job
+    # first to populate tags). If the GLOBAL scope filter changed, it aborts and
+    # asks for a full run. Writes to the SAME tags table as the full job.
+    # ----------------------------------------------------------------------
+    voc_classification_rule_incremental_job:
+      name: "[${bundle.target}] GM VOC Classification (rule engine, incremental)"
+      tasks:
+        - task_key: classify_rules_incremental
+          notebook_task:
+            notebook_path: ./classification_rule_engine/run_incremental_notebook.py
+            base_parameters:
+              metadata_table: ${var.catalog}.${var.schema}.${var.metadata_table_name}
+              tags_table: ${var.target_catalog}.${var.target_schema}.${var.rule_tags_table_name}
+              freq_table: ${var.target_catalog}.${var.target_schema}.${var.rule_freq_table_name}
+              snapshot_table: ${var.target_catalog}.${var.target_schema}.${var.rule_tags_table_name}__rules_snapshot
+              # Set to "1" for a run that only (re)seeds the snapshot, then exits.
+              seed_only: "0"
       queue:
         enabled: true
 
@@ -207,6 +244,8 @@ resources:
               min_words: ${var.min_words}
               sample_mode: ${var.sample_mode}
               context_window: ${var.context_window}
+              hour_start: ${var.hour_start}
+              hour_end: ${var.hour_end}
       queue:
         enabled: true
 
@@ -231,6 +270,9 @@ resources:
               classify_date: ${var.ai_classify_date}
               warehouse_id: ${var.sql_warehouse_id}
               sample_limit: ${var.ai_classify_sample_limit}
+              min_words: ${var.min_words}
+              hour_start: ${var.hour_start}
+              hour_end: ${var.hour_end}
       queue:
         enabled: true
 

@@ -55,7 +55,7 @@ DEFAULTS = {
     # window. The scope SQL matches to_date(document_date) == classify_date.
     "classify_date": "2026-06-11",
     # LLM endpoint used for multi-label classification via ai_query.
-    "classify_endpoint": "databricks-meta-llama-3-3-70b-instruct",
+    "classify_endpoint": "databricks-claude-sonnet-4-6",
     # Cap rows for a cost-bounded POC run; set to 0 for the full corpus.
     # Keep this small for smoke tests — each row is a paid LLM call.
     "sample_limit": "200",

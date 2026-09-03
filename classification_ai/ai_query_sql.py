@@ -52,7 +52,12 @@ DEFAULTS = {
     "ai_tags_table": _NS + ".voc_classification_ai_query_sql_tags",
     # AI track runs on a SINGLE calendar day (empty = no date filter).
     "classify_date": "2026-06-11",
-    "classify_endpoint": "databricks-meta-llama-3-3-70b-instruct",
+    # Optional hour-of-day window within that day (based on the document_date
+    # timestamp string, e.g. "...T09:.."). Both empty = whole day. hour_end is
+    # EXCLUSIVE, so hour_start=9, hour_end=12 means 09:00:00-11:59:59.
+    "hour_start": "",
+    "hour_end": "",
+    "classify_endpoint": "databricks-claude-sonnet-4-6",
     # Number of sentences to classify. 0 = all.
     "sample_limit": "0",
     # QUALITY KNOBS (added to fix over-tagging of short filler on real data):
@@ -121,6 +126,15 @@ def build_statements(params):
     day = (params.get("classify_date") or "").strip()
     if day:
         where += " AND to_date(document_date) = '%s'" % day
+    # Optional hour-of-day window. The hour is read straight from the ISO
+    # timestamp STRING (chars 12-13, e.g. "2026-06-11T09:..") so it matches the
+    # hour you see in document_date (no timezone conversion). hour_end exclusive.
+    hs = (params.get("hour_start") or "").strip()
+    he = (params.get("hour_end") or "").strip()
+    if hs != "" and he != "":
+        where += (" AND cast(substring(document_date, 12, 2) AS INT) >= %d"
+                  " AND cast(substring(document_date, 12, 2) AS INT) < %d"
+                  % (int(hs), int(he)))
     # (2) content pre-filter: drop sentences shorter than min_words words.
     min_words = int(params.get("min_words") or 0)
     if min_words > 0:

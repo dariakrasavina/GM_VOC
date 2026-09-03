@@ -116,12 +116,21 @@ the rule job and an AI job have produced their tag tables).
 ## Requirements & caveats
 - **Serverless + DBR 18.2+**, Model-Serving region. The DBSQL-batch jobs also need
   a SQL warehouse (`warehouse_id`) that supports AI functions.
+- **Scoped to a single day** (`classify_date`, default `2026-06-11`), independent of
+  the rule engine's date window, so an AI run is a bounded, comparable slice. The
+  DBSQL jobs also take an optional `hour_start`/`hour_end` window. Default endpoint:
+  **`databricks-claude-sonnet-4-6`** (best quality of the models tested).
 - **Pay-per-call** — each *distinct* sentence is one LLM call (dedup means you pay
   per unique sentence, not per row). `sample_limit` bounds it.
 - **Throughput ceiling.** A shared **pay-per-token** endpoint rate-limits large
-  batches: a full single day (~1.3M distinct sentences) runs ~11–14 h and is
-  best served by a **provisioned-throughput** endpoint. Dedup + frequency-first
-  sampling mitigate; a faster model does **not** raise a QPS cap.
+  batches. Measured on a full single day (~1.25M distinct sentences, ~2.2M rows):
+  the built-in `ai_classify` (fixed managed model) runs at ~4,800 distinct
+  sentences/min (~4–5 h/day); the `ai_query` Sonnet path is rate-limited slower
+  (~2,900/min, ~7 h/day). The full dataset (a year) needs a
+  **provisioned-throughput** endpoint (self-serve for open-weight models; a
+  committed-throughput request via Databricks for Claude). Dedup + frequency-first
+  sampling mitigate, but a faster model does **not** raise a QPS cap. See the
+  scaling discussion in the POC summary deck (`docs/make_summary_pptx.py`).
 - **Non-deterministic** — the LLM varies run-to-run and tends to *over-tag*
   (higher recall, lower precision) vs. the strict rules. The compare job
   quantifies where they diverge.

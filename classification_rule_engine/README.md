@@ -22,11 +22,16 @@ rule_engine.py   parses + evaluates GM's rule syntax  (pure Python, no Spark)
         ▼
 tagger.py        applies scope filter + all categories + hierarchy roll-up
         │
-        ├──► run_local.py            run locally over CSVs (no cluster)
-        └──► voc_topic_model_job.py  run on Databricks at scale (pandas_udf)
-                     │
+        ├──► run_local.py             run locally over CSVs (no cluster)
+        ├──► voc_topic_model_job.py   FULL run on Databricks at scale (pandas_udf)
+        │            │
+        │            ▼
+        │    run_job_notebook.py      Databricks entrypoint that calls the job
+        │
+        └──► incremental_rule_job.py  INCREMENTAL re-tag after a rule change
+                     │                (re-tags only affected sentences/columns)
                      ▼
-             run_job_notebook.py     Databricks entrypoint that calls the job
+             run_incremental_notebook.py   Databricks entrypoint
 ```
 
 `rule_engine.py` and `tagger.py` **never import pyspark**, so the exact same
@@ -88,6 +93,44 @@ The production run. Logic in order:
 ### `run_job_notebook.py` — Databricks entrypoint
 Thin notebook: puts the folder on `sys.path`, imports the job, calls `run()`.
 
+### `incremental_rule_job.py` — incremental re-tag after a rule change
+Avoids the hours-long full re-run when you only tweak a rule. It re-tags **only
+the sentences and columns a rule change can affect**, and `MERGE`s them into the
+existing tags table **in place** — existing sentences with unaffected tags are
+never touched. Safe because a tag is a deterministic function of the text + rule.
+
+How it works:
+1. Keeps a **rules snapshot** (`<tags_table>__rules_snapshot`) of what the table
+   was last built with. First run **seeds** it and exits.
+2. **Diffs** `category_model.json` vs the snapshot → changed / added / removed
+   categories. If the **global scope filter** changed it aborts (scope moves for
+   every row → run the full job).
+3. **Affected columns** = changed/added/removed categories **+ their ancestors**
+   (roll-up). Only these columns are written.
+4. **Candidate rows** = rows currently tagged `1` in a changed column (may lose
+   it) **∪** rows whose text contains a keyword term from the rule's *new*
+   definition (may gain it) — a provable superset of all rows that can change.
+   Fuzzy/attribute seeds that a text pre-filter can't bound fall back to a full
+   in-scope scan of that one column.
+5. Recomputes those columns for candidates with the **same tagger**, `MERGE`s in
+   place, refreshes the frequency table, and updates the snapshot.
+
+The diff / affected-column / pre-filter logic is pure Python and unit-tested
+(see the `inc:` cases in `test_rule_engine.py`).
+
+Typical flow:
+```
+# once, after the full job has populated the tags table:
+databricks bundle run voc_classification_rule_incremental_job -t sandbox -p <profile> \
+  --var="rule_tags_table_name=voc_classification_rule_tags_v2"   # seeds the snapshot
+# edit shared/category_model.json (change a rule), then:
+databricks bundle run voc_classification_rule_incremental_job -t sandbox -p <profile> \
+  --var="rule_tags_table_name=voc_classification_rule_tags_v2"   # applies just the delta
+```
+
+### `run_incremental_notebook.py` — Databricks entrypoint (incremental)
+Thin notebook: puts the folder on `sys.path`, imports the incremental job, `run()`.
+
 ### `run_local.py` — local driver (no cluster)
 Stdlib-only. Loads the sample CSVs, joins on `natural_id`, applies the **same**
 `tagger`, writes `tagged_sentences.csv` + frequency/summary files. Used to
@@ -98,8 +141,9 @@ Renders topic frequencies + representative verbatims (with matched-term
 chicklets) from the local run outputs.
 
 ### `test_rule_engine.py` — unit tests
-33 tests covering every rule operator (OR/AND/NOT, phrases, wildcards, fuzzy,
-proximity, attributes, negation edge cases). All passing.
+46 tests: every rule operator (OR/AND/NOT, phrases, wildcards, fuzzy, proximity,
+attributes, negation edge cases) plus the incremental planning logic (diff,
+affected-column roll-up, pre-filter extraction, full-scan fallbacks). All passing.
 
 ---
 

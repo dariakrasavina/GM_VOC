@@ -1,0 +1,577 @@
+<title>Scaling ai_classify to 600M Rows</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+  :root {
+    --ground: #FAF8F5;
+    --surface: #FFFFFF;
+    --surface-2: #F2EEE7;
+    --ink: #1A1A1E;
+    --ink-soft: #46454C;
+    --muted: #78756D;
+    --line: #E5E0D7;
+    --line-strong: #D4CDC0;
+    --accent: #C9440A;
+    --accent-ink: #C9440A;
+    --accent-wash: #FaEaDF;
+    --good: #1E7A4C;
+    --good-wash: #E4F1EA;
+    --warn: #9C6B12;
+    --warn-wash: #F6EDD9;
+    --crit: #BE3226;
+    --crit-wash: #F8E5E2;
+    --info: #2A6885;
+    --info-wash: #E3EEF3;
+    --shadow: 0 1px 2px rgba(26,26,30,.05), 0 8px 24px -12px rgba(26,26,30,.14);
+    --measure: 68ch;
+    --radius: 10px;
+  }
+  :root:not([data-theme="light"]) {
+    @media (prefers-color-scheme: dark) {
+      --ground: #131418;
+      --surface: #1B1D22;
+      --surface-2: #23262D;
+      --ink: #ECEBE5;
+      --ink-soft: #BDBAB2;
+      --muted: #8B8880;
+      --line: #2C3038;
+      --line-strong: #3A3F49;
+      --accent: #FF7E45;
+      --accent-ink: #FF8A55;
+      --accent-wash: #2E1D14;
+      --good: #55C48D;
+      --good-wash: #16241C;
+      --warn: #E0A94A;
+      --warn-wash: #29220F;
+      --crit: #E86F63;
+      --crit-wash: #2B1815;
+      --info: #6FB4D8;
+      --info-wash: #12222B;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px -14px rgba(0,0,0,.6);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #131418;
+    --surface: #1B1D22;
+    --surface-2: #23262D;
+    --ink: #ECEBE5;
+    --ink-soft: #BDBAB2;
+    --muted: #8B8880;
+    --line: #2C3038;
+    --line-strong: #3A3F49;
+    --accent: #FF7E45;
+    --accent-ink: #FF8A55;
+    --accent-wash: #2E1D14;
+    --good: #55C48D;
+    --good-wash: #16241C;
+    --warn: #E0A94A;
+    --warn-wash: #29220F;
+    --crit: #E86F63;
+    --crit-wash: #2B1815;
+    --info: #6FB4D8;
+    --info-wash: #12222B;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px -14px rgba(0,0,0,.6);
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+    font-size: 16.5px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 clamp(18px, 4vw, 48px); }
+  .prose { max-width: var(--measure); }
+
+  h1, h2, h3 { font-family: "Archivo", system-ui, sans-serif; text-wrap: balance; line-height: 1.12; letter-spacing: -.01em; }
+  h2 { font-size: clamp(1.5rem, 3.2vw, 2.05rem); font-weight: 700; margin: 0 0 .2em; }
+  h3 { font-size: 1.16rem; font-weight: 700; margin: 2.2em 0 .5em; letter-spacing: 0; }
+  p { margin: 0 0 1.05em; color: var(--ink-soft); }
+  a { color: var(--accent-ink); text-underline-offset: 2px; text-decoration-thickness: 1px; }
+  strong { color: var(--ink); font-weight: 600; }
+  code, .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; }
+  :not(pre) > code {
+    font-size: .86em; background: var(--surface-2); color: var(--ink);
+    padding: .1em .38em; border-radius: 5px; border: 1px solid var(--line);
+    word-break: break-word;
+  }
+  .eyebrow {
+    font-family: "IBM Plex Mono", monospace; font-size: .74rem; font-weight: 500;
+    letter-spacing: .16em; text-transform: uppercase; color: var(--accent-ink);
+  }
+  .lede { font-size: 1.18rem; color: var(--ink-soft); }
+
+  /* ---- Header ---- */
+  .masthead { border-bottom: 1px solid var(--line); background: linear-gradient(180deg, var(--surface-2), transparent); }
+  .masthead-inner { padding: clamp(32px, 6vw, 60px) 0 clamp(26px, 4vw, 40px); }
+  .masthead h1 { font-size: clamp(2.1rem, 6vw, 3.4rem); font-weight: 800; margin: .28em 0 .32em; letter-spacing: -.02em; }
+  .masthead h1 .fn { color: var(--accent-ink); }
+  .metastrip { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 1.4em; }
+  .tag {
+    font-family: "IBM Plex Mono", monospace; font-size: .78rem; font-weight: 500;
+    background: var(--surface); border: 1px solid var(--line-strong); color: var(--ink-soft);
+    padding: .3em .7em; border-radius: 100px; white-space: nowrap;
+  }
+  .tag b { color: var(--ink); font-weight: 600; }
+
+  /* ---- Section rhythm ---- */
+  section { padding: clamp(40px, 6vw, 68px) 0; border-bottom: 1px solid var(--line); }
+  .sec-head { display: flex; align-items: baseline; gap: .7em; margin-bottom: 1.4em; }
+  .sec-num { font-family: "IBM Plex Mono", monospace; font-size: .95rem; font-weight: 500; color: var(--accent-ink); }
+
+  /* ---- Callout / mental model ---- */
+  .callout {
+    background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--accent);
+    border-radius: var(--radius); padding: 1.15em 1.35em; margin: 1.4em 0; box-shadow: var(--shadow);
+  }
+  .callout p:last-child { margin-bottom: 0; }
+  .callout.info { border-left-color: var(--info); }
+  .callout.warn { border-left-color: var(--warn); }
+  .callout.good { border-left-color: var(--good); }
+  .callout .k { font-family: "IBM Plex Mono", monospace; font-size: .72rem; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); display: block; margin-bottom: .35em; }
+
+  .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin: 1.4em 0; }
+  .mini {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 1.05em 1.15em;
+  }
+  .mini h4 { font-family: "Archivo", sans-serif; margin: 0 0 .35em; font-size: 1rem; font-weight: 700; }
+  .mini p { margin: 0; font-size: .95rem; }
+
+  /* ---- Requirement register ---- */
+  .reg { display: flex; flex-direction: column; gap: 10px; margin-top: 1.5em; }
+  .req {
+    display: grid; grid-template-columns: 92px 1fr; gap: 0 18px;
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 1.05em 1.25em; align-items: start;
+  }
+  .req-id { font-family: "IBM Plex Mono", monospace; font-size: .82rem; font-weight: 600; color: var(--muted); padding-top: .15em; }
+  .req-body h4 { margin: 0 0 .3em; font-family: "IBM Plex Sans", sans-serif; font-size: 1.02rem; font-weight: 600; color: var(--ink); }
+  .req-body p { margin: 0; font-size: .95rem; }
+  .req-body p + p { margin-top: .5em; }
+  .chip {
+    display: inline-block; font-family: "IBM Plex Mono", monospace; font-size: .68rem; font-weight: 600;
+    letter-spacing: .08em; text-transform: uppercase; padding: .22em .55em; border-radius: 5px; vertical-align: 1px;
+  }
+  .chip.must { background: var(--crit-wash); color: var(--crit); border: 1px solid color-mix(in srgb, var(--crit) 30%, transparent); }
+  .chip.should { background: var(--warn-wash); color: var(--warn); border: 1px solid color-mix(in srgb, var(--warn) 34%, transparent); }
+  .chip.avoid { background: var(--crit-wash); color: var(--crit); border: 1px dashed color-mix(in srgb, var(--crit) 45%, transparent); }
+  .chip.info { background: var(--info-wash); color: var(--info); border: 1px solid color-mix(in srgb, var(--info) 32%, transparent); }
+  .chip.good { background: var(--good-wash); color: var(--good); border: 1px solid color-mix(in srgb, var(--good) 32%, transparent); }
+  .req-body .chip { margin-bottom: .5em; }
+
+  /* ---- Stages ---- */
+  .stages { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; margin-top: 1.6em; counter-reset: stage; }
+  .stage {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 1.15em 1.2em;
+    display: flex; flex-direction: column; position: relative; overflow: hidden;
+  }
+  .stage::before {
+    content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--accent); opacity: .8;
+  }
+  .stage-n { font-family: "IBM Plex Mono", monospace; font-size: .74rem; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+  .stage h4 { font-family: "Archivo", sans-serif; font-size: 1.08rem; font-weight: 700; margin: .15em 0 .1em; }
+  .stage .scale { font-family: "IBM Plex Mono", monospace; font-size: .82rem; color: var(--accent-ink); font-weight: 500; margin-bottom: .7em; }
+  .stage ul { margin: 0 0 .9em; padding-left: 1.05em; font-size: .9rem; color: var(--ink-soft); }
+  .stage ul li { margin-bottom: .3em; }
+  .stage .exit {
+    margin-top: auto; font-size: .84rem; color: var(--ink-soft);
+    border-top: 1px dashed var(--line-strong); padding-top: .7em;
+  }
+  .stage .exit b { display: block; font-family: "IBM Plex Mono", monospace; font-size: .68rem; letter-spacing: .1em; text-transform: uppercase; color: var(--good); margin-bottom: .25em; }
+
+  /* ---- Tables ---- */
+  .tbl-wrap { overflow-x: auto; margin: 1.4em 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: .92rem; min-width: 460px; }
+  caption { text-align: left; font-family: "IBM Plex Mono", monospace; font-size: .74rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); padding: .9em 1.1em .2em; }
+  th, td { text-align: left; padding: .68em 1.1em; border-bottom: 1px solid var(--line); vertical-align: top; }
+  thead th { font-family: "IBM Plex Mono", monospace; font-size: .72rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 600; background: var(--surface-2); }
+  tbody tr:last-child td { border-bottom: none; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; font-family: "IBM Plex Mono", monospace; }
+  .dot { display: inline-block; width: .62em; height: .62em; border-radius: 50%; margin-right: .5em; vertical-align: 0; }
+  .dot.g { background: var(--good); } .dot.w { background: var(--warn); } .dot.c { background: var(--crit); } .dot.i { background: var(--info); }
+
+  /* ---- Code ---- */
+  pre {
+    margin: 1.4em 0; padding: 1.15em 1.3em; background: var(--surface-2); border: 1px solid var(--line);
+    border-radius: var(--radius); overflow-x: auto; font-family: "IBM Plex Mono", monospace;
+    font-size: .84rem; line-height: 1.6; color: var(--ink);
+  }
+  pre .cm { color: var(--muted); }
+  pre .kw { color: var(--accent-ink); font-weight: 500; }
+  pre .fn { color: var(--info); font-weight: 500; }
+
+  /* ---- Formula ---- */
+  .formula {
+    background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius);
+    padding: 1.1em 1.3em; margin: 1.4em 0; font-family: "IBM Plex Mono", monospace; font-size: 1rem;
+    text-align: center; color: var(--ink); box-shadow: var(--shadow);
+  }
+  .formula .op { color: var(--muted); margin: 0 .5em; }
+  .formula .term { color: var(--accent-ink); }
+
+  ul.clean { list-style: none; padding-left: 0; margin: 1.2em 0; }
+  ul.clean li { position: relative; padding-left: 1.5em; margin-bottom: .6em; color: var(--ink-soft); }
+  ul.clean li::before { content: "→"; position: absolute; left: 0; color: var(--accent-ink); font-family: "IBM Plex Mono", monospace; }
+
+  .footer { padding: 40px 0 60px; color: var(--muted); font-size: .86rem; }
+  .footer a { color: var(--muted); }
+  .footer .links { display: flex; flex-wrap: wrap; gap: .3em 1.2em; margin-top: .6em; font-family: "IBM Plex Mono", monospace; font-size: .82rem; }
+
+  /* theme toggle */
+  .toggle {
+    position: fixed; top: 14px; right: 14px; z-index: 20;
+    background: var(--surface); border: 1px solid var(--line-strong); color: var(--ink-soft);
+    font-family: "IBM Plex Mono", monospace; font-size: .74rem; letter-spacing: .05em;
+    padding: .5em .8em; border-radius: 100px; cursor: pointer; box-shadow: var(--shadow);
+  }
+  .toggle:hover { color: var(--ink); border-color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+  @media (max-width: 560px) {
+    .req { grid-template-columns: 1fr; gap: .5em; }
+    .req-id { padding-top: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
+</style>
+
+<button class="toggle" id="themeToggle" aria-label="Toggle color theme">◐ theme</button>
+
+<header class="masthead">
+  <div class="wrap masthead-inner">
+    <div class="eyebrow">Batch Inference Runbook · Databricks AI Functions</div>
+    <h1>Scaling <span class="fn">ai_classify</span> from a 2.2M POC to 600M rows</h1>
+    <p class="lede prose">A requirements and best-practices spec for running large-scale AI-based text classification on Databricks — how to prove it at POC scale, extrapolate honestly, and execute the full backfill without surprises on cost, throughput, or reliability.</p>
+    <div class="metastrip">
+      <span class="tag"><b>POC</b> 2.2M rows</span>
+      <span class="tag"><b>Target</b> 600M rows</span>
+      <span class="tag"><b>Function</b> ai_classify v2.1</span>
+      <span class="tag"><b>Pricing</b> compute-based (MU-hours)</span>
+      <span class="tag"><b>Engine</b> DBSQL / Serverless</span>
+    </div>
+  </div>
+</header>
+
+<main>
+
+<!-- 0 — MENTAL MODEL -->
+<section>
+  <div class="wrap">
+    <div class="sec-head"><span class="sec-num">00</span><h2>The one thing to internalize first</h2></div>
+    <div class="prose">
+      <p>Every decision in this document follows from a single fact: <strong>AI Functions batch inference is priced on compute, not tokens.</strong> When you submit a batch, Databricks provisions GPU capacity — measured in <strong>Model Units (MU)</strong> — processes the job, and scales down. You pay for MU-hours allocated over the job's duration, not for input/output tokens.</p>
+    </div>
+    <div class="formula prose">
+      <span class="term">Cost</span><span class="op">=</span>Model Units provisioned<span class="op">×</span>price / MU-hour<span class="op">×</span>job duration
+    </div>
+    <div class="grid-2">
+      <div class="mini"><h4>Consequence 1 — no universal $/row</h4><p>There is no reliable rows-per-minute or cost-per-row figure to look up. Compute-based cost depends on your data and output size. You <strong>must benchmark</strong> to get real numbers.</p></div>
+      <div class="mini"><h4>Consequence 2 — faster ≈ same cost</h4><p>Raising the MU ceiling shortens wall-clock time at <em>roughly the same total cost</em>, because you consume similar MU-hours in less time at higher parallelism.</p></div>
+      <div class="mini"><h4>Consequence 3 — output tokens are the lever</h4><p>Duration scales with total work — dominated by <strong>output tokens</strong>. Rationales and confidence text inflate output and are the #1 cause of blown estimates.</p></div>
+      <div class="mini"><h4>Consequence 4 — do less work</h4><p>The cheapest classification is the one you don't run. At 600M rows, <strong>deduplication</strong> is the dominant cost lever — classify distinct text, join labels back.</p></div>
+    </div>
+    <div class="callout warn">
+      <span class="k">Diagnostic that matters most</span>
+      <p>Check the run's billing / query metadata. <code>COMPUTE_TIME</code> means you are on the <strong>batch / AI Functions</strong> path (capacity-based — the guidance here applies). <code>TOKEN</code> means you slipped onto the <strong>PPT / FMAPI</strong> path (token-based) — a slow <code>TOKEN</code> run is a capacity investigation, <em>not</em> warehouse tuning. Do not stand up a customer-managed Provisioned Throughput endpoint first: AI Functions does not run on PT-endpoint compute.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 1 — HARD REQUIREMENTS -->
+<section>
+  <div class="wrap">
+    <div class="sec-head"><span class="sec-num">01</span><h2>Hard requirements</h2></div>
+    <p class="prose">Baseline conditions the job must satisfy before it can run at scale. <span class="chip must">Must</span> blocks execution or correctness; <span class="chip should">Should</span> is strongly recommended; <span class="chip avoid">Avoid</span> is a known anti-pattern.</p>
+    <div class="reg">
+      <div class="req"><div class="req-id">REQ-01</div><div class="req-body"><span class="chip must">Must</span><h4>Runtime & engine floor</h4><p>Use <strong>DBR 16.1+</strong> for AI Functions (never below 15.4 LTS). Runs on Serverless / SQL Warehouse — <strong>not SQL Classic</strong>. <code>ai_classify</code> cannot be applied through a <strong>View</strong>.</p></div></div>
+      <div class="req"><div class="req-id">REQ-02</div><div class="req-body"><span class="chip must">Must</span><h4>Use ai_classify v2.1 explicitly</h4><p>Pin <code>version = '2.1'</code> in the options map. v2.1 returns a <code>VARIANT</code> — <code>{response:[{value, confidence_score}], metadata, error_message}</code> — which differs from v2.0 (plain strings) and v1.0 (single string). Downstream parsing must read <code>.response[*].value</code>.</p></div></div>
+      <div class="req"><div class="req-id">REQ-03</div><div class="req-body"><span class="chip must">Must</span><h4>Stay within the label ceiling</h4><p>2–500 labels in v2.x, each 1–100 chars, content ≤ 1M tokens. If the VOC taxonomy exceeds ~500 categories, <code>ai_classify</code> is the wrong tool — switch that portion to <strong>vector_search + LLM</strong>.</p></div></div>
+      <div class="req"><div class="req-id">REQ-04</div><div class="req-body"><span class="chip must">Must</span><h4>Deduplicate before classifying</h4><p>At 600M rows this is not an optimization, it is the architecture. Classify the <strong>distinct</strong> normalized text set, then join labels back to all rows. See §03.</p></div></div>
+      <div class="req"><div class="req-id">REQ-05</div><div class="req-body"><span class="chip must">Must</span><h4>Checkpoint the full backfill</h4><p>600M rows cannot ride on a single non-resumable query. Use <strong>Structured Streaming</strong> with <code>trigger(availableNow=True)</code> + a checkpoint location so a failure at row 400M resumes instead of re-running (and re-paying) from zero.</p></div></div>
+      <div class="req"><div class="req-id">REQ-06</div><div class="req-body"><span class="chip should">Should</span><h4>Turn rationales off in production</h4><p>Keep <code>enableRationales</code> (and often <code>enableConfidenceScores</code>) on for QA only. In the prod path they inflate output tokens → longer duration → more MU-hours, for output you won't store.</p></div></div>
+      <div class="req"><div class="req-id">REQ-07</div><div class="req-body"><span class="chip should">Should</span><h4>Prefer the managed model; benchmark before switching</h4><p>Task-specific <code>ai_classify</code> uses a Databricks-managed model (no model choice) — this is the intended path. Only if model selection is mandatory, move to <code>ai_query</code> and test <code>gpt-oss-120b</code> first, then <code>llama-4-maverick</code>. Do not promise Sonnet-equivalent quality without a representative eval.</p></div></div>
+      <div class="req"><div class="req-id">REQ-08</div><div class="req-body"><span class="chip avoid">Avoid</span><h4>Manual micro-batching & parallel notebooks</h4><p>Do not split the work into small chunks or fan out across notebooks. It shows up as a spiky MU-utilization graph and <em>reduces</em> throughput. Submit one large set-based query and let the platform parallelize.</p></div></div>
+      <div class="req"><div class="req-id">REQ-09</div><div class="req-body"><span class="chip info">Info</span><h4>Governance & compliance are covered</h4><p>Data stays in your workspace/region, is never used for training, transient logs only. HIPAA on all clouds; PCI/FedRAMP via Compliance Security Profile. UC lineage/audit apply. Pin the output schema version for compliance stability.</p></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- 2 — DEDUP: THE 600M LEVER -->
+<section>
+  <div class="wrap">
+    <div class="sec-head"><span class="sec-num">02</span><h2>The dedup lever — why 600M is really far fewer</h2></div>
+    <div class="prose">
+      <p>Voice-of-customer text is highly repetitive: canned responses, short common phrases, template fragments. You are billed for <em>work done</em>, so classifying 600M rows when only a fraction are unique is paying many times over for the same answer. <strong>Measure the distinct ratio on the 2.2M POC</strong>, then classify only distinct normalized text and join labels back.</p>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <caption>Illustrative leverage at 600M — replace ratio with your POC-measured value</caption>
+        <thead><tr><th>Distinct ratio (measured)</th><th class="num">Distinct rows to classify</th><th class="num">Work vs. naïve</th><th>Implication</th></tr></thead>
+        <tbody>
+          <tr><td><span class="dot g"></span>10% (very repetitive)</td><td class="num">60,000,000</td><td class="num">10× less</td><td>Dedup alone is the difference between feasible and not</td></tr>
+          <tr><td><span class="dot g"></span>25%</td><td class="num">150,000,000</td><td class="num">4× less</td><td>Large saving; still needs streaming + MU increase</td></tr>
+          <tr><td><span class="dot w"></span>50%</td><td class="num">300,000,000</td><td class="num">2× less</td><td>Worthwhile; verify normalization is aggressive enough</td></tr>
+          <tr><td><span class="dot c"></span>90% (near-unique)</td><td class="num">540,000,000</td><td class="num">1.1× less</td><td>Little help — expect full-scale cost, plan capacity accordingly</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="prose">Normalization quality drives the ratio: lower-case, trim, collapse whitespace, and consider stripping punctuation/IDs before the <code>DISTINCT</code>. Match your normalization on both sides of the join.</p>
+    <pre><span class="cm">-- 1) Classify only DISTINCT normalized text — the dominant cost lever at 600M</span>
+<span class="kw">CREATE OR REPLACE TABLE</span> voc.distinct_labeled <span class="kw">AS</span>
+<span class="kw">SELECT</span>
+  text_norm,
+  <span class="fn">ai_classify</span>(
+    text_norm,
+    labels,                                  <span class="cm">-- array, or {label: description} map</span>
+    <span class="fn">map</span>(<span class="kw">'version'</span>,<span class="kw">'2.1'</span>, <span class="kw">'multilabel'</span>,<span class="kw">'true'</span>)   <span class="cm">-- rationales OFF in prod</span>
+  ) <span class="kw">AS</span> classification
+<span class="kw">FROM</span> (<span class="kw">SELECT DISTINCT</span> <span class="fn">lower</span>(<span class="fn">trim</span>(text)) <span class="kw">AS</span> text_norm <span class="kw">FROM</span> voc.raw_600m);
+
+<span class="cm">-- 2) Join labels back to all 600M rows (cheap — no inference here)</span>
+<span class="kw">CREATE OR REPLACE TABLE</span> voc.labeled <span class="kw">AS</span>
+<span class="kw">SELECT</span> r.*, d.classification
+<span class="kw">FROM</span> voc.raw_600m r
+<span class="kw">JOIN</span> voc.distinct_labeled d <span class="kw">ON</span> <span class="fn">lower</span>(<span class="fn">trim</span>(r.text)) = d.text_norm;</pre>
+  </div>
+</section>
+
+<!-- 3 — STAGED ROLLOUT -->
+<section>
+  <div class="wrap">
+    <div class="sec-head"><span class="sec-num">03</span><h2>The staged path from POC to 600M</h2></div>
+    <p class="prose">Do not extrapolate from a 100-row test — the system needs volume to reach steady-state throughput, so small tests always feel slow. Move through four gates, and only pass each when its exit criteria are met.</p>
+    <div class="stages">
+      <div class="stage">
+        <div class="stage-n">Stage 0 · Calibrate</div>
+        <h4>Micro-benchmark</h4>
+        <div class="scale">50K–100K distinct rows</div>
+        <ul>
+          <li>Confirm labels, descriptions, and prompt/instructions</li>
+          <li>Rationales ON — inspect quality of a sample</li>
+          <li>Record avg <strong>output tokens</strong> per row</li>
+          <li>Confirm metadata shows <code>COMPUTE_TIME</code></li>
+        </ul>
+        <div class="exit"><b>Exit when</b> labels & output shape are locked and token size is known.</div>
+      </div>
+      <div class="stage">
+        <div class="stage-n">Stage 1 · Prove</div>
+        <h4>Run the POC</h4>
+        <div class="scale">2.2M rows</div>
+        <ul>
+          <li>Measure the <strong>distinct ratio</strong> (§02)</li>
+          <li>Rationales OFF (prod config); QA sample separately</li>
+          <li>Capture MU-hours, duration, success rate from <code>go/batchinference/debug</code></li>
+          <li>Quality eval on a labeled sample</li>
+        </ul>
+        <div class="exit"><b>Exit when</b> quality passes and per-distinct-row MU-hours is measured.</div>
+      </div>
+      <div class="stage">
+        <div class="stage-n">Stage 2 · Project</div>
+        <h4>Extrapolate & size</h4>
+        <div class="scale">math, not compute</div>
+        <ul>
+          <li>Compute 600M distinct set = 600M × ratio</li>
+          <li>Estimate MU-hours & cost (§04)</li>
+          <li>Decide MU ceiling for target duration</li>
+          <li>File <code>go/batchlimitincrease</code> if needed</li>
+        </ul>
+        <div class="exit"><b>Exit when</b> cost/duration are approved and capacity is granted.</div>
+      </div>
+      <div class="stage">
+        <div class="stage-n">Stage 3 · Execute</div>
+        <h4>Full backfill</h4>
+        <div class="scale">600M rows</div>
+        <ul>
+          <li>Structured Streaming + checkpoint (resume-safe)</li>
+          <li><code>failOnError =&gt; false</code>; monitor MU graph live</li>
+          <li>Then run incrementally for new data</li>
+          <li>Verify billing under <code>AI_FUNCTIONS</code></li>
+        </ul>
+        <div class="exit"><b>Exit when</b> all rows labeled at ≥95% success and cost matches projection.</div>
+      </div>
+    </div>
+    <div class="callout info">
+      <span class="k">Throughput reality</span>
+      <p><code>ai_classify</code> needs roughly <strong>25K–50K+ rows</strong> to reach steady-state throughput; the first few minutes are ramp-up. At 600M you are far past that floor — the risk is not "too small to be fast," it is the MU ceiling and output-token size. Benchmark at 50K–100K, never at 100 rows.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 4 — COST & CAPACITY -->
+<section>
+  <div class="wrap">
+    <div class="sec-head"><span class="sec-num">04</span><h2>Estimating cost & sizing capacity</h2></div>
+    <div class="prose">
+      <p>Because cost is compute-based, the only honest estimate comes from measuring at POC scale and scaling by the distinct row count. The method:</p>
+    </div>
+    <ul class="clean prose">
+      <li>From Stage 1, read <strong>MU-hours consumed</strong> and <strong>distinct rows processed</strong> (D<sub>poc</sub>) off the debug dashboard.</li>
+      <li>Per-row rate = MU-hours<sub>poc</sub> ÷ D<sub>poc</sub>. This is the number that travels.</li>
+      <li>Target distinct set D<sub>prod</sub> = 600M × measured distinct ratio.</li>
+      <li>Estimated MU-hours<sub>prod</sub> ≈ per-row rate × D<sub>prod</sub> (roughly linear in total work).</li>
+      <li>Estimated cost ≈ MU-hours<sub>prod</sub> × price per MU-hour.</li>
+      <li>Estimated duration ≈ MU-hours<sub>prod</sub> ÷ MU ceiling — so raising the ceiling shortens the run at ~constant cost.</li>
+    </ul>
+    <div class="callout warn">
+      <span class="k">The estimate-buster</span>
+      <p>Linear scaling only holds if <strong>output tokens per row are stable</strong>. If rationales were on during the POC but off in prod (or vice-versa), the per-row rate is wrong. Lock the exact prod configuration <em>before</em> the Stage-1 measurement.</p>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <caption>Model Unit capacity — defaults and the sizing question</caption>
+        <thead><tr><th>Lever</th><th>Default</th><th>Effect of raising it</th></tr></thead>
+        <tbody>
+          <tr><td>MU per session</td><td class="mono">1,000</td><td>Higher parallelism → shorter duration, ~same total cost</td></tr>
+          <tr><td>MU per workspace</td><td class="mono">4,000</td><td>Ceiling across concurrent jobs; request increase via <code>go/batchlimitincrease</code></td></tr>
+          <tr><td>Batch size</td><td class="mono">whole dataset</td><td>Bigger = better steady-state throughput (never micro-batch)</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <caption>Billing & tracking — know which bucket you land in</caption>
+        <thead><tr><th>Function</th><th>Billing product</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td><code>ai_classify</code> / <code>ai_extract</code> / <code>ai_parse_document</code></td><td class="mono">AI_FUNCTIONS</td><td>The path for this project</td></tr>
+          <tr><td><code>ai_query</code></td><td class="mono">MODEL_SERVING / BATCH_INFERENCE</td><td>Only if you move to model selection</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="prose">Public list figures for <code>ai_classify</code> (a budget tier ~3–6 DBU/1k docs vs. a standard tier ~40–60 DBU/1k docs) are useful for an order-of-magnitude sanity check only — verify against the live pricing page and treat your own benchmark as the source of truth. For context: OpenAI/Anthropic/Bedrock batch APIs can be ~50% cheaper per token, but this path wins on total cost of ownership (no infra), OSS models, and native Delta/UC integration.</p>
+  </div>
+</section>
+
+<!-- 5 — EXECUTION PATTERN -->
+<section>
+  <div class="wrap">
+    <div class="sec-head"><span class="sec-num">05</span><h2>The execution pattern for the backfill</h2></div>
+    <p class="prose">For the 600M run, wrap the distinct-set classification in Structured Streaming so it checkpoints. The payoff is resume-on-failure: a crash at row 400M of the distinct set restarts there, not at zero.</p>
+    <pre><span class="cm"># Structured Streaming with AI Functions — resume-safe backfill</span>
+<span class="kw">from</span> pyspark.sql <span class="kw">import</span> functions <span class="kw">as</span> F
+
+stream = spark.readStream.table(<span class="kw">"voc.distinct_text"</span>)   <span class="cm"># DISTINCT normalized text</span>
+
+labeled = stream.selectExpr(
+    <span class="kw">"*"</span>,
+    <span class="kw">"""ai_classify(text_norm, labels,
+                   map('version','2.1','multilabel','true')) AS classification"""</span>
+)
+
+(labeled.writeStream
+    .trigger(availableNow=<span class="kw">True</span>)                     <span class="cm"># process all available, then stop</span>
+    .option(<span class="kw">"checkpointLocation"</span>, <span class="kw">"/Volumes/voc/_chk/classify"</span>)
+    .toTable(<span class="kw">"voc.distinct_labeled"</span>))
+
+<span class="cm"># If it fails partway, just re-run — the checkpoint skips finished rows.</span></pre>
+    <div class="callout good">
+      <span class="k">Steady-state hygiene</span>
+      <p>Keep everything at DataFrame / set level (never row-by-row loops). Use <code>failOnError =&gt; false</code> so a few bad rows don't kill a multi-hour job — inspect the error column afterward. Batch is optimized for volume: one big stream beats many small triggers.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 6 — OBSERVABILITY -->
+<section>
+  <div class="wrap">
+    <div class="sec-head"><span class="sec-num">06</span><h2>Observability & troubleshooting</h2></div>
+    <p class="prose">The <code>go/batchinference/debug</code> dashboard is the single most useful diagnostic. Find the Batch Run ID (workspace ID + time range → "Find Batch Run ID"), then read the Model-Unit utilization graph — its shape tells the story.</p>
+    <div class="tbl-wrap">
+      <table>
+        <caption>MU-utilization graph patterns</caption>
+        <thead><tr><th>Pattern</th><th>Meaning</th><th>Action</th></tr></thead>
+        <tbody>
+          <tr><td><span class="dot g"></span>Ramps up, stays high</td><td>Healthy — running at the ceiling</td><td>Need more speed? Request MU increase</td></tr>
+          <tr><td><span class="dot c"></span>Flat at the ceiling</td><td>At max limit — throughput-capped</td><td><code>go/batchlimitincrease</code></td></tr>
+          <tr><td><span class="dot w"></span>Stays low the whole time</td><td>Low demand or errors in the data</td><td>Check inputs / error column</td></tr>
+          <tr><td><span class="dot c"></span>Spikes up and down</td><td>Mini-batching (anti-pattern)</td><td>Consolidate into one large query</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <caption>Debug-tab metrics — what "healthy" looks like</caption>
+        <thead><tr><th>Metric</th><th>Expected</th><th>If not</th></tr></thead>
+        <tbody>
+          <tr><td>Total inferences</td><td>≈ row count (slightly higher = retries, normal)</td><td>Far off → inspect input</td></tr>
+          <tr><td>Success rate</td><td class="mono">≥ 95%</td><td>Examine error types</td></tr>
+          <tr><td>Avg MU utilization</td><td class="mono">≥ 70%</td><td>Output tokens too high — trim</td></tr>
+          <tr><td>Output tokens</td><td>Reasonable for the task</td><td>High → drop rationales / maxTokens</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <caption>Common errors</caption>
+        <thead><tr><th>Error</th><th>Fix</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">429 Rate Limit</td><td>Check dashboard; request MU increase</td></tr>
+          <tr><td class="mono">INTERNAL_ERROR</td><td><code>failOnError =&gt; false</code> + retries</td></tr>
+          <tr><td class="mono">PERMISSION_DENIED</td><td>Grant admin access / budget policy</td></tr>
+          <tr><td class="mono">PROHIBITED_CONTENT</td><td>Sanitize input (or switch model on ai_query)</td></tr>
+          <tr><td class="mono">ENDPOINT_NOT_FOUND</td><td>Enable cross-geo routing</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout">
+      <span class="k">Escalation</span>
+      <p>Quality problems (wrong labels) go to the research team via the <code>#apa-ai-functions</code> workflow. Bugs / performance go to an ES ticket (<code>go/aifunction/incident</code>) plus <code>#apa-ai-functions</code>. Include function, sample input, expected vs. actual, workspace ID, and batch run ID.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 7 — PREFLIGHT -->
+<section>
+  <div class="wrap">
+    <div class="sec-head"><span class="sec-num">07</span><h2>Pre-flight checklist for the 600M run</h2></div>
+    <div class="reg">
+      <div class="req"><div class="req-id">✓ 01</div><div class="req-body"><h4>Distinct ratio measured on the 2.2M POC, join keys normalized identically on both sides</h4></div></div>
+      <div class="req"><div class="req-id">✓ 02</div><div class="req-body"><h4>Prod config frozen: version 2.1, multilabel setting fixed, rationales OFF, confidence per requirement</h4></div></div>
+      <div class="req"><div class="req-id">✓ 03</div><div class="req-body"><h4>Per-distinct-row MU-hours captured; cost & duration projected and approved</h4></div></div>
+      <div class="req"><div class="req-id">✓ 04</div><div class="req-body"><h4>MU limit increase filed and granted if the target duration needs it (<code>go/batchlimitincrease</code>)</h4></div></div>
+      <div class="req"><div class="req-id">✓ 05</div><div class="req-body"><h4>Structured Streaming checkpoint location provisioned; job is idempotent / resume-safe</h4></div></div>
+      <div class="req"><div class="req-id">✓ 06</div><div class="req-body"><h4>Quality eval passed on a representative labeled sample; output schema version pinned</h4></div></div>
+      <div class="req"><div class="req-id">✓ 07</div><div class="req-body"><h4>Metadata confirmed as <code>COMPUTE_TIME</code> (batch), billing lands under <code>AI_FUNCTIONS</code></h4></div></div>
+      <div class="req"><div class="req-id">✓ 08</div><div class="req-body"><h4><code>failOnError =&gt; false</code> set; error column will be reviewed after the run</h4></div></div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="wrap">
+    <div>Reference spec for GM VOC classification · figures marked illustrative must be replaced with POC-measured values · verify pricing against the live Databricks page before quoting.</div>
+    <div class="links">
+      <span>docs.databricks.com/…/ai_classify</span>
+      <span>go/aifunctions-faq</span>
+      <span>go/batchinference/debug</span>
+      <span>go/batchlimitincrease</span>
+      <span>#apa-ai-functions</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+  (function () {
+    var btn = document.getElementById('themeToggle');
+    var root = document.documentElement;
+    function current() {
+      var explicit = root.getAttribute('data-theme');
+      if (explicit) return explicit;
+      return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+    try {
+      var saved = localStorage.getItem('voc-theme');
+      if (saved === 'dark' || saved === 'light') root.setAttribute('data-theme', saved);
+    } catch (e) {}
+    btn.addEventListener('click', function () {
+      var next = current() === 'dark' ? 'light' : 'dark';
+      root.setAttribute('data-theme', next);
+      try { localStorage.setItem('voc-theme', next); } catch (e) {}
+    });
+  })();
+</script>

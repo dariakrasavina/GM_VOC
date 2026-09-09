@@ -138,6 +138,17 @@ targets:
   sandbox:
     mode: development
     default: true
+    # Sandbox-specific variable overrides. The SQL warehouse that runs the DBSQL
+    # batch ai_query / ai_classify jobs is baked in here so `bundle run` needs no
+    # --var. Warehouse ids are workspace-scoped, not secrets. The `client` target
+    # keeps the empty default (supplied per client at deploy/run time).
+    variables:
+      sql_warehouse_id: 148ccb90800933a1
+      # The sandbox sample table holds October 2025 data (not the 2026-06-11
+      # production default), so the single-day AI classify / compare run must
+      # target a date that actually has rows. 2025-10-04 has ~1,575 English audio
+      # client verbatims.
+      ai_classify_date: "2025-10-04"
     workspace:
       host: https://adb-984752964297111.11.azuredatabricks.net
 

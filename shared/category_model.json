@@ -149,7 +149,7 @@
       "comparison_target": true,
       "has_rules": true,
       "lanes": {
-        "keywords": "redeem* use using used",
+        "keywords": "redeem*",
         "and": "point* reward*",
         "and2": "",
         "not": "\"redemption notice available\", \"congratulations on redeeming\", \"she is calling\", \"he is calling\", \"car specialist\", \"he is trying\", \"she is trying\", \"he was trying\", \"she was trying\", \"she is interested\", \"he is interested\", \"need your authorization\", \"redeem his points\", \"redeem her points\", \"redeeming his points\", \"redeeming her points\", \"customer is calling\", \"customer is trying\", \"customer was trying\", \"you can start earning points\", \"customer's points\"~1, \"you can earn and redeem\", \"have a customer\", \"he wants to redeem\", \"she wants to redeem\", \"you should be able to redeem\", \"what she can redeem\", \"what he can redeem\""

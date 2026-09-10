@@ -22,21 +22,21 @@ different ways, so we can **compare them and pick the best**. A third does
 
 | Track | Job it does | How it works | Role |
 |-------|-------------|--------------|------|
-| **Classification (rule engine)** | Classification | Keyword/boolean category rules (the same logic GM uses today). Multi-label + hierarchy roll-up. Same answer every time; easy to explain. | Compared with ai_classify |
-| **Classification (ai_classify)** | Classification | An LLM reads each sentence and assigns all applicable categories (multi-label + roll-up, same shape as the rule engine). | Compared with rule engine |
+| **Classification (rule engine)** | Classification | Keyword/boolean category rules (the same logic GM uses today). Multi-label + hierarchy roll-up. Same answer every time; easy to explain. **Full** run + an **incremental** re-tag when rules change. | Control / bake-off |
+| **Classification (AI)** | Classification | A hosted **LLM reads each sentence** and assigns all applicable categories (multi-label + roll-up, same shape as the rule engine). Two DBSQL-batch paths: `ai_query` + a category-definition prompt (model-selectable) and the built-in `ai_classify` v2.1 (fixed managed model). | Compared with rule engine |
 | **Topic modeling** | Topic discovery | Groups similar sentences to surface themes nobody predefined (embeddings + clustering). | Exploratory (standalone) |
 | **Sentiment model** | Sentiment | A trained model rating each sentence Very Negative → Very Positive. | Used together with classification |
 
-**How to read this:** rule engine vs. ai_classify is a **bake-off** for
-classification — a separate comparison job scores how much they agree, so GM can
-choose one (or blend them). Topic modeling is exploratory (it invents its own
-themes, so it isn't compared). The sentiment model is complementary — it adds
-"how does the customer feel?" on top of "what category is this?"
+**How to read this:** rule engine vs. AI is a **bake-off** for classification — a
+separate comparison job scores how much they agree, so GM can choose one (or blend
+them). Topic modeling is exploratory (it invents its own themes, so it isn't
+compared). The sentiment model is complementary — it adds "how does the customer
+feel?" on top of "what category is this?"
 
 ```mermaid
 flowchart LR
     RE["Classification<br/>(rule engine)"]
-    AI["Classification<br/>(ai_classify)"]
+    AI["Classification<br/>(AI / ai_query)"]
     CMP{{"Compare"}}
     TM["Topic modeling<br/>(find new themes)"]
     SENT["Sentiment model"]
@@ -70,11 +70,19 @@ must appear, words that must not, phrases, etc.).
 **Classification (rule engine).** Re-creates GM's existing category rules. It's
 deterministic (same input → same output) and fully explainable — you can see
 exactly which words assigned a category. Downside: someone maintains the rules,
-and it misses wording the rules didn't anticipate.
+and it misses wording the rules didn't anticipate. Two ways to run it:
+- **Full** (`voc_classification_rule_job`) — tags the whole in-scope corpus.
+- **Incremental** (`voc_classification_rule_incremental_job`) — when you tweak a
+  rule, it re-tags **only the sentences and columns that change** and merges them
+  into the existing table in place, instead of the hours-long full re-run.
 
-**Classification (ai_classify).** Uses the Databricks `ai_classify` AI function:
-an LLM reads a sentence and assigns it to the categories. No keyword upkeep and it
-handles paraphrasing, but it costs a bit per call and isn't perfectly repeatable.
+**Classification (AI).** A hosted LLM reads each sentence and assigns the
+categories by *meaning*, so it catches paraphrases the rules miss. No keyword
+upkeep, but it costs per call and isn't perfectly repeatable. Two implementations
+(so they can be compared) — see `classification_ai/README.md`: `ai_query` + a
+custom prompt as **DBSQL batch** (model-selectable, default
+`databricks-claude-sonnet-4-6`), and the built-in `ai_classify` v2.1 function
+(fixed managed model). Both run as batch on a SQL warehouse.
 
 **Topic modeling.** Uses `ai_query` embeddings + clustering + `ai_gen` to **find
 themes nobody predefined** — the exploratory counterpart to classification.
@@ -91,12 +99,12 @@ refine once people review real data.
 
 ```
 gm_voc/
-├── classification_rule_engine/  Classification via GM's category rules + its job
-├── classification_ai/           Classification via ai_classify + the compare job
+├── classification_rule_engine/  Rule-engine classification: full job + incremental re-tag
+├── classification_ai/           Three AI classifiers (ai_query / DBSQL batch / ai_classify) + compare
 ├── topic_modeling/              Topic discovery (embeddings + clustering)
 ├── sentiment_model/             Sentiment training + scoring
 ├── shared/                      category_model.json + helper scripts
-├── docs/                        architecture diagrams + write-ups
+├── docs/                        architecture diagrams, write-ups + PowerPoint generators
 ├── test_data/                   sample + demo CSVs
 └── databricks.yml               Databricks Asset Bundle (defines the jobs)
 ```
@@ -112,44 +120,70 @@ Databricks and can be tested on a laptop.
 - **Join:** `sentence.natural_id == metadata.natural_id`.
 - **Grain:** one row per sentence (the `words` column).
 
+> **Grain matters for comparisons.** GM's dashboards and Qualtrics count
+> **documents / calls** (`COUNT(DISTINCT id_verbatim)`), while a raw sentence count
+> (`COUNT(*)`) is larger (a call has several sentences). Compare like-for-like at
+> the **call grain** — this reconciled our tag counts with Qualtrics.
+
 ---
 
 ## How it runs
 
-Four Databricks jobs (defined in `databricks.yml`):
+Seven Databricks jobs (defined in `databricks.yml`):
 
 ```mermaid
 flowchart TB
-    RE["voc_classification_rule_job<br/>rule-engine classification"]
-    AI["voc_classification_ai_job<br/>ai_classify + topic modeling"]
-    CMP["voc_classification_compare_job<br/>rule engine vs ai_classify"]
+    RE["voc_classification_rule_job<br/>rule engine (full)"]
+    INC["voc_classification_rule_incremental_job<br/>rule engine (incremental re-tag)"]
+    AIS["voc_classification_ai_query_sql_job<br/>ai_query (DBSQL batch)"]
+    AIC["voc_classification_ai_classify_job<br/>ai_classify v2.1 (DBSQL batch)"]
+    CMP["voc_classification_compare_job<br/>rule engine vs AI"]
+    TM["voc_topic_modeling_job<br/>topic discovery (standalone)"]
     SENT["voc_sentiment_model_job<br/>train + score sentiment"]
 
+    RE --> INC
     RE --> CMP
-    AI --> CMP
+    AIS --> CMP
 ```
 
-- **`voc_classification_rule_job`** → writes `voc_classification_rule_tags`
-- **`voc_classification_ai_job`** → writes `voc_classification_ai_tags` + discovered themes
-- **`voc_classification_compare_job`** → reads both tag tables, writes the comparison
-  (run it *after* the two above)
-- **`voc_sentiment_model_job`** → trains + scores sentiment (independent)
+**Classification — rule engine**
+- **`voc_classification_rule_job`** → writes `voc_classification_rule_tags` (+ `_frequencies`)
+- **`voc_classification_rule_incremental_job`** → after a rule change, re-tags only
+  the affected sentences/columns and merges them **into the same tags table**
+  (keeps a `…__rules_snapshot`). See `classification_rule_engine/README.md`.
+
+**Classification — AI** (each writes its own table so both can be compared)
+- **`voc_classification_ai_query_sql_job`** → `voc_classification_ai_query_sql_tags`
+- **`voc_classification_ai_classify_job`** → `voc_classification_ai_classify_tags`
+
+**Comparison & complementary tracks**
+- **`voc_classification_compare_job`** → reads a rule table + an AI table, writes
+  the comparison (run it *after* the classification jobs)
+- **`voc_topic_modeling_job`** → discovered themes (independent, exploratory)
+- **`voc_sentiment_model_job`** → trains + scores sentiment (independent, GPU)
+
+The AI classification jobs are **scoped to a single day** (`ai_classify_date`) and
+the DBSQL-batch jobs need a **SQL warehouse** (`sql_warehouse_id`); see
+`docs/DEPLOYMENT.md` for the bundle variables.
 
 ### Run on Databricks
 
 ```bash
 databricks bundle deploy -t sandbox -p <profile>
 
-databricks bundle run voc_classification_rule_job    -t sandbox -p <profile>
-databricks bundle run voc_classification_ai_job      -t sandbox -p <profile>
-databricks bundle run voc_classification_compare_job -t sandbox -p <profile>   # after the two above
-databricks bundle run voc_sentiment_model_job        -t sandbox -p <profile>
+databricks bundle run voc_classification_rule_job              -t sandbox -p <profile>
+databricks bundle run voc_classification_rule_incremental_job  -t sandbox -p <profile>  # after a rule change
+databricks bundle run voc_classification_ai_query_sql_job      -t sandbox -p <profile>  # ai_query, DBSQL batch
+databricks bundle run voc_classification_ai_classify_job       -t sandbox -p <profile>  # ai_classify v2.1
+databricks bundle run voc_classification_compare_job           -t sandbox -p <profile>  # after the above
+databricks bundle run voc_topic_modeling_job                   -t sandbox -p <profile>  # independent
+databricks bundle run voc_sentiment_model_job                  -t sandbox -p <profile>
 ```
 
 ### Run the rule engine locally (no cluster)
 
 ```bash
-python3 classification_rule_engine/test_rule_engine.py            # unit tests
+python3 classification_rule_engine/test_rule_engine.py            # unit tests (46/46)
 python3 classification_rule_engine/run_local.py --out outputs/    # classify the sample CSVs
 
 # demo data that actually contains the categories:
@@ -161,28 +195,34 @@ python3 classification_rule_engine/run_local.py \
 
 ---
 
-## Output tables (`daria_krasavina.gm_voc`)
+## Output tables (`daria_krasavina.gm_voc` by default; derived from the bundle catalog/schema)
 
 | Table | From | Contents |
 |-------|------|----------|
-| `voc_classification_rule_tags` | rule engine | one 0/1 column per category (leaves + rolled-up parents) + the words that assigned them |
-| `voc_classification_ai_tags` | ai_classify | one 0/1 column per category (multi-label + roll-up) + sentiment |
+| `voc_classification_rule_tags` (+ `_frequencies`) | rule engine | one 0/1 column per category (leaves + rolled-up parents) + the words that assigned them |
+| `voc_classification_rule_tags__rules_snapshot` | rule engine (incremental) | the rules the tags table was last built with (used to diff on the next incremental run) |
+| `voc_classification_ai_query_sql_tags` | AI — `ai_query` (DBSQL batch) | one 0/1 column per category (multi-label + roll-up) + the raw category list the LLM returned |
+| `voc_classification_ai_classify_tags` | AI — built-in `ai_classify` v2.1 | one 0/1 column per category (multi-label + roll-up) + confidence |
 | `voc_topicmodeling_themes` / `voc_topicmodeling_assignments` | topic modeling | new themes found in the data |
-| `voc_classification_comparison` | compare | how much the two classifiers agree, per category |
+| `voc_classification_comparison` | compare | how much a rule table and an AI table agree, per category |
 | `voc_sentiment_scored` | sentiment | sentiment per sentence (trained model + baseline) |
 
 ---
 
 ## Status
 
-- **Classification (rule engine):** built, 33/33 unit tests pass, validated locally.
-- **Classification (ai_classify):** runs on Databricks and writes tags.
+- **Classification (rule engine):** built, **46/46** unit tests pass (rule syntax +
+  incremental planning), validated locally. Full and incremental jobs deployed.
+- **Classification (AI):** two implementations run on Databricks and write tags;
+  `ai_query` DBSQL-batch is the model-selectable path (best quality with
+  `databricks-claude-sonnet-4-6` + a tightened prompt), `ai_classify` v2.1 the
+  purpose-built one.
 - **Topic modeling:** runs on Databricks.
 - **Sentiment model:** training/scoring jobs run on Databricks; baseline runs locally.
 - All jobs are deployed to the Databricks sandbox.
 
 **Important:** the provided sample data is synthetic OnStar dialogue that doesn't
-contain the four categories, so a real run correctly assigns **0** categories. The
+contain the four categories, so a run on it correctly assigns **0** categories. The
 demo fixture shows classification working end-to-end. Meaningful results need real
 transcripts.
 
@@ -192,7 +232,22 @@ transcripts.
 2. Compare the two classifiers against GM's existing tags (accuracy per category).
 3. Review the topic-modeling themes with the team.
 4. Have people label a set of real examples, then retrain the sentiment model on them.
-5. Measure cost and speed at full volume.
+5. Measure cost and speed at full volume (see the scaling notes in `classification_ai/README.md`).
+
+---
+
+## Presentations
+
+Two PowerPoint decks are generated (stdlib only — no external libraries) and can be
+imported into Google Slides (Drive → *Open with → Google Slides*):
+
+| Deck | Generator | For |
+|------|-----------|-----|
+| `GM_VOC_POC_Summary.pptx` | `docs/make_summary_pptx.py` | Executive summary — approach, results, next steps (with charts) |
+| `GM_VOC_Technical_Deep_Dive.pptx` | `docs/make_deepdive_pptx.py` | How each classifier works, file by file, with architecture/pipeline diagrams |
+
+Both share the OOXML engine in `docs/pptx_lib.py`. Regenerate with
+`python3 docs/make_deepdive_pptx.py` (or `make_summary_pptx.py`).
 
 ---
 

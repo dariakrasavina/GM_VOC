@@ -1,95 +1,151 @@
 # Classification — AI (Databricks AI functions)
 
-The lightweight AI-powered classification track. Instead of hand-maintained
-keyword rules, an **LLM** reads each sentence and decides which categories apply
-— by *meaning*, so it catches paraphrases the rules miss. It also produces
-sentiment, and this folder holds the job that **compares** it against the rule
-engine.
+The AI-powered classification track: instead of hand-maintained keyword rules, a
+**hosted LLM** reads each sentence and decides which of the 4 POC categories
+apply — by *meaning*, so it catches paraphrases the rules miss. This folder holds
+**two implementations** of that idea (so they can be compared) plus the job that
+scores them against the rule engine.
 
-**Uses a hosted foundation model** (not trained or owned — you call Databricks AI
-functions). Non-deterministic and pay-per-row, so runs are capped by
-`sample_limit`.
+Both call **hosted Databricks foundation models** (not trained or owned) —
+non-deterministic and pay-per-call, so runs are bounded by `sample_limit`. Shared
+category-loading + prompt code lives in `ai_common.py`.
+
+---
+
+## The two approaches
+
+Both classify against the **same** `shared/category_model.json`, **dedup** first
+(classify each *distinct* sentence once, then fan the tag back to every row that
+shares it), **roll up** leaf matches to parent categories, and write the **same
+output shape** (one 0/1 column per category). They differ in *which function* and
+*how they steer the model*:
+
+| Module | Function | Labels | Model | Output table |
+|---|---|---|---|---|
+| `ai_query_sql.py` | `ai_query` + custom prompt | **multi**-label | your choice (Sonnet 4.6) | `voc_classification_ai_query_sql_tags` |
+| `ai_classify.py` | built-in `ai_classify()` **v2.1** | **multi**-label + descriptions + confidence | fixed managed | `voc_classification_ai_classify_tags` |
+
+Both run as **DBSQL batch** on a SQL warehouse (`CREATE TABLE AS SELECT …`), so the
+engine drives concurrency to the endpoint directly.
+
+**Which to use:** `ai_query_sql.py` is the higher-quality, model-selectable path
+(custom prompt + Sonnet 4.6). `ai_classify.py` (v2.1) is a purpose-built classifier
+with label descriptions, multi-label output, and confidence scores, but on a
+**fixed managed model** (no model choice) — worth comparing on cost/quality.
+
+> A per-partition PySpark version (`ai_query_job.py`) was removed — it was bounded
+> by partition count and crawled on large days; the DBSQL-batch path supersedes it.
 
 ---
 
 ## How the pieces fit together
 
 ```
-shared/category_model.json          category names + definitions (shared with rules)
+shared/category_model.json ──► ai_common.py  (load categories + build prompt)
         │
-        ▼
-ai_classify_job.py   LLM assigns categories (multi-label) + sentiment
-        │                     │
-run_ai_classify_notebook.py   └──► voc_classification_ai_tags
-                                        │
-compare_approaches_job.py  ── reads rule tags + AI tags ──► voc_classification_comparison
-run_compare_notebook.py
+        ├─► ai_query_sql.py    (ai_query, DBSQL batch) ──► voc_classification_ai_query_sql_tags
+        │     run_ai_query_sql_notebook.py
+        │
+        └─► ai_classify.py     (ai_classify v2.1)      ──► voc_classification_ai_classify_tags
+              run_ai_classify_notebook.py
+
+compare_approaches_job.py  ── rule tags + an AI tags table ──► voc_classification_comparison
+        run_compare_notebook.py
 ```
 
 ---
 
 ## File-by-file
 
-### `ai_classify_job.py` — LLM classification + sentiment (the core)
-Classifies each in-scope sentence into the 4 POC categories, **multi-label +
-roll-up** (same output shape as the rule engine so the two are comparable).
+### `ai_common.py` — shared helpers (no pyspark)
+`find_category_model()` / `load_categories()` locate and parse the shared
+`category_model.json`; `build_prompt()` builds the multi-label `ai_query` prompt.
+Imported by both classifiers and the A/B harness so they use identical categories
+and prompt text.
 
-Key functions and their logic:
+### `ai_query_sql.py` — `ai_query`, multi-label (DBSQL batch)
+Same classification logic, expressed as **set-based SQL** (`CREATE TABLE AS SELECT
+ai_query(...)`) submitted to a SQL warehouse via the Statement Execution API.
 
-| Function | What it does | Logic used |
-|---|---|---|
-| `get_params()` | resolve table names, endpoints, `sample_limit` | widgets / argv / defaults |
-| `load_categories()` | read `category_model.json` | builds label→definition, id map, **ancestors** for roll-up |
-| `build_prompt()` | craft the LLM instruction | "return ALL categories that apply as a JSON array", with each category's business definition |
-| `run()` | the pipeline | see below |
-| `expand_ids()` | map returned names → ids + roll up | a sentence matching a leaf also gets its parent categories |
+- The roll-up is compiled into SQL (`arrays_overlap` over precomputed per-category
+  trigger names) — no UDF.
+- **Sampling (`sample_mode`):** when `sample_limit = N`, distinct sentences are
+  sampled **randomly by default** (representative — fair for evaluation). Set
+  `sample_mode=frequency` for a capped *production* run to score the most-common
+  sentences first (max row coverage). With `sample_limit=0` all distinct sentences
+  are classified, so the mode is moot. (The FAQ doesn't prescribe frequency-first;
+  it over-samples short filler, which skews small evals.)
+- Requires `warehouse_id`.
 
-`run()` step by step:
-1. Scope-filter in SQL (English + audio + customer-side + date).
-2. **`ai_query(endpoint, prompt + sentence)`** → the LLM returns a JSON array of
-   all applicable category names (true multi-label — *not* the single-label
-   `ai_classify` builtin, which is why `ai_query` is used with a custom prompt).
-3. Parse the array, map names→ids, **roll up to ancestors** (via `expand_ids`).
-4. **`ai_analyze_sentiment(words)`** → positive / negative / neutral / mixed.
-5. Explode to one 0/1 column per category (leaves + parents) + `ai_categories`
-   (raw LLM output) + `sentiment`; write `voc_classification_ai_tags`.
+### `ai_classify.py` — built-in `ai_classify()` **v2.1** (DBSQL batch)
+Uses the purpose-built `ai_classify(text, labels, MAP('version','2.1', ...))`.
 
-Reads categories from the **same `category_model.json`** the rule engine uses, so
-both classifiers judge against identical categories.
+- **Labels with descriptions:** labels are a JSON object `{category: definition}`,
+  so the managed model sees each category's business definition (no cryptic
+  ≤50-char labels). Reuses the same definitions from `category_model.json`.
+- **Multi-label** (`'multilabel'='true'`): returns ALL applicable categories — a
+  sentence that matches nothing returns an empty list, so no synthetic "None of
+  the above" label is needed.
+- **Confidence scores** (`enableConfidenceScores`) are captured (0–1) for triage;
+  **rationales** (`enableRationales`) are OFF by default (extra output tokens —
+  enable for QA). Errors surface in the result's `error_message` (no `failOnError`
+  needed).
+- **Global `instructions`** steer the managed model the way the ai_query prompt
+  steers ai_query ("most sentences match nothing", etc.).
+- The returned label names are rolled up to parents with `arrays_overlap` — the
+  SAME roll-up as `ai_query_sql` — so the output shape matches the other tracks.
+- Requires `warehouse_id`. Still a **fixed managed model** (you cannot choose
+  Claude/GPT), so accuracy may differ from the Sonnet `ai_query` path — that's
+  what the comparison job is for.
 
 ### `compare_approaches_job.py` — rule engine vs. AI agreement
-The cross-track comparison (the "regression vs. control" deliverable). Logic:
-- `all_categories()` — list every category from the model.
-- `run()` — joins `voc_classification_rule_tags` and `voc_classification_ai_tags`
-  on `id_verbatim`; for each category computes: rule-positives, AI-positives,
-  agreement, rule-only, AI-only, and **precision / recall / F1 of the AI using
-  the rule engine as proxy ground truth**. Writes `voc_classification_comparison`.
-- Compares **all** categories present in both tables (leaves + rolled-up parents),
-  column-by-column — apples-to-apples because both sides share the output shape.
+The "regression vs. control" deliverable. Scoped to a single day (`compare_date`).
+`run()` joins `voc_classification_rule_tags` and an AI tags table on `id_verbatim`
+and, per category, computes rule-positives, AI-positives, agreement, rule-only,
+AI-only, and **precision / recall / F1 of the AI using the rule engine as proxy
+ground truth**. Writes `voc_classification_comparison`. (Defaults to
+`voc_classification_ai_query_sql_tags`; point `ai_tags_table` at
+`voc_classification_ai_classify_tags` to compare that one.)
 
-### `run_ai_classify_notebook.py` — Databricks entrypoint
-Thin notebook: adds folder to `sys.path`, imports `ai_classify_job`, calls
-`run()`.
+### `ab_test_prompt.py` — prompt A/B harness (diagnostic)
+Runs two prompts (current vs. a candidate) **plus a second current-prompt pass as
+a model-noise floor** over a sample, and reports agreement. Because `ai_query` is
+non-deterministic, the noise floor separates real prompt-driven changes from
+random variation. Use before changing the production prompt (or extend it to
+compare models).
 
-### `run_compare_notebook.py` — Databricks entrypoint
-Thin notebook: imports `compare_approaches_job`, calls `run()`. Run this **after**
-both the rule job and the AI classify job have produced their tag tables.
+### Notebook entrypoints
+Thin wrappers that add the folder to `sys.path`, import the module, and call
+`run()`: `run_ai_query_sql_notebook.py`, `run_ai_classify_notebook.py`, and
+`run_compare_notebook.py` (run compare **after** the rule job and an AI job have
+produced their tag tables).
 
 ---
 
-## Inputs / outputs
-
-- **`ai_classify_job`** reads the sentence table + `category_model.json`; writes
-  `voc_classification_ai_tags` (per-category 0/1 + sentiment, multi-label + roll-up).
-- **`compare_approaches_job`** reads `voc_classification_rule_tags` +
-  `voc_classification_ai_tags`; writes `voc_classification_comparison`.
-
 ## Requirements & caveats
-- **Serverless + DBR 18.2+**, Model-Serving region (AI functions).
-- **Pay-per-row** — each sentence is an LLM call. `sample_limit` caps this
-  (default 200); set `0` for the full corpus once cost is understood.
-- **Non-deterministic** — the LLM can vary run-to-run and tends to *over-tag*
+- **Serverless + DBR 18.2+**, Model-Serving region. The DBSQL-batch jobs also need
+  a SQL warehouse (`warehouse_id`) that supports AI functions.
+- **Scoped to a single day** (`classify_date`, default `2026-06-11`), independent of
+  the rule engine's date window, so an AI run is a bounded, comparable slice. The
+  DBSQL jobs also take an optional `hour_start`/`hour_end` window. Default endpoint:
+  **`databricks-claude-sonnet-4-6`** (best quality of the models tested).
+- **Pay-per-call** — each *distinct* sentence is one LLM call (dedup means you pay
+  per unique sentence, not per row). `sample_limit` bounds it.
+- **Throughput ceiling.** A shared **pay-per-token** endpoint rate-limits large
+  batches. Measured on a full single day (~1.25M distinct sentences, ~2.2M rows):
+  the built-in `ai_classify` (fixed managed model) runs at ~4,800 distinct
+  sentences/min (~4–5 h/day); the `ai_query` Sonnet path is rate-limited slower
+  (~2,900/min, ~7 h/day). The full dataset (a year) needs a
+  **provisioned-throughput** endpoint (self-serve for open-weight models; a
+  committed-throughput request via Databricks for Claude). Dedup mitigates, but a
+  faster model does **not** raise a QPS cap.
+
+> **Visual walkthrough:** the full `ai_query_sql` / `ai_classify` logic (the three
+> batch-SQL statements, dedup vs. context, roll-up compiled to `arrays_overlap`,
+> and the scaling discussion) is diagrammed in the deep-dive deck —
+> `GM_VOC_Technical_Deep_Dive.pptx`, generated by `docs/make_deepdive_pptx.py`.
+- **Non-deterministic** — the LLM varies run-to-run and tends to *over-tag*
   (higher recall, lower precision) vs. the strict rules. The compare job
-  quantifies exactly where they diverge.
+  quantifies where they diverge.
 - Not to be confused with **topic modeling** (`../topic_modeling/`), which
   *discovers new themes* rather than assigning the predefined categories.

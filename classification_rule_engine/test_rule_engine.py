@@ -80,6 +80,59 @@ check("real frag excluded", m(frag, "there is no confusion at all"), False)
 check("real frag unrelated", m(frag, "the weather is nice"), False)
 
 
+# --- Incremental tagging: diff, affected-column roll-up, and pre-filter ------
+import incremental_rule_job as inc  # noqa: E402
+
+
+def _rules(leaf_kw, parent_kw="", extra_nodes=None):
+    """Tiny 2-level model: Parent -> Leaf, for planning tests."""
+    nodes = [
+        {"id": "parent", "name": "Parent", "path": [],
+         "lanes": {"keywords": parent_kw, "and": "", "and2": "", "not": ""}},
+        {"id": "leaf", "name": "Leaf", "path": ["Parent"], "comparison_target": True,
+         "lanes": {"keywords": leaf_kw, "and": "", "and2": "", "not": ""}},
+    ]
+    nodes += (extra_nodes or [])
+    return {"global_filter": {"name": "g",
+            "lanes": {"keywords": "*", "and": "", "and2": "", "not": ""}},
+            "nodes": nodes}
+
+
+_old = _rules("redeem* use using used")
+_new = _rules("redeem*")                       # the real Redeem fix
+
+_p = inc.plan_incremental(_old, _new)
+check("inc: leaf flagged changed", _p["changed"], ["leaf"])
+check("inc: affected rolls up to parent", set(_p["affected_columns"]), {"leaf", "parent"})
+check("inc: pre-filter bounds it", _p["needs_full_scan"], False)
+check("inc: pre-filter has stem", "redeem" in _p["prefilter_substrings"], True)
+check("inc: no-op when identical", inc.plan_incremental(_new, _new)["nothing_to_do"], True)
+
+# global scope change must abort (can't be bounded incrementally)
+_g = _rules("redeem*"); _g["global_filter"]["lanes"]["and"] = "_id_source:chat"
+check("inc: global change flagged", inc.plan_incremental(_rules("redeem*"), _g)["global_changed"], True)
+
+# added / removed categories
+_added = _rules("redeem*", extra_nodes=[{"id": "leaf2", "name": "Leaf2",
+    "path": ["Parent"], "lanes": {"keywords": "voucher*", "and": "", "and2": "", "not": ""}}])
+_pa = inc.plan_incremental(_rules("redeem*"), _added)
+check("inc: detects added category", _pa["added"], ["leaf2"])
+_pr = inc.plan_incremental(_added, _rules("redeem*"))
+check("inc: detects removed category", _pr["removed"], ["leaf2"])
+
+# unbounded seeds -> full-scan fallback (fuzzy, then attribute)
+check("inc: fuzzy seed -> full scan",
+      inc.plan_incremental(_rules("redeem*"), _rules("redeeem~"))["needs_full_scan"], True)
+check("inc: attr seed -> full scan",
+      inc.plan_incremental(_rules("redeem*"), _rules("cc_lob_mv:*reward*"))["needs_full_scan"], True)
+
+# term extraction specifics
+_subs, _full = inc.extract_prefilter('"make no sense", confused, bewilder*')
+check("inc: extract picks longest phrase word", "sense" in _subs, True)
+check("inc: extract keeps wildcard stem", "bewilder" in _subs, True)
+check("inc: extract not full for plain terms", _full, False)
+
+
 def main():
     passed = sum(1 for _, g, w in CASES if g == w)
     for desc, got, want in CASES:

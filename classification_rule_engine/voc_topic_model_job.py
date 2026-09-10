@@ -230,7 +230,7 @@ def run():
 
     # Persist ONLY in-scope rows (customer-side English audio, non-boilerplate),
     # matching the POC requirement ("customer-side verbatims only") and the AI
-    # job's scope — so voc_classification_rule_tags and voc_classification_ai_tags
+    # job's scope — so voc_classification_rule_tags and voc_classification_ai_query_tags
     # cover the same population and compare row-for-row. Agent-side, non-English,
     # and boilerplate rows are dropped rather than kept with all-zero tags.
     tagged_out = tagged_out.filter(F.col("in_scope") == True)  # noqa: E712

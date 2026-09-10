@@ -16,6 +16,66 @@ compared against.
 
 ---
 
+## In plain terms: three code layers over one data file
+
+The whole track is **three pieces of code doing one job each**, acting on **one file of rules**. The easiest way to hold it in your head:
+
+| Layer | File | What it is | Everyday analogy |
+|---|---|---|---|
+| **The rules** | `shared/category_model.json` | Your categories and their keyword lanes — this is **data you edit**, not code | A **recipe book** you can rewrite anytime |
+| **The calculator** | `rule_engine.py` | Understands the rule *language* (`AND`, `NOT`, `wild*`, `fuzzy~`, proximity `~2`) and can evaluate any rule against a sentence. Knows nothing about VOC or your categories. | A **calculator** — it computes any formula you type in |
+| **The accountant** | `tagger.py` | Takes *your* categories from the JSON and uses the calculator to check one sentence against all of them (plus the scope filter and hierarchy roll-up) | An **accountant** who runs *your company's* formulas on one invoice |
+| **The warehouse** | `voc_topic_model_job.py` | Runs the accountant across **millions** of sentences on Spark | A **warehouse full of accountants** doing it at scale |
+
+```mermaid
+flowchart TB
+    CM["category_model.json<br/><b>THE RULES</b> — data you edit"]
+
+    subgraph LOGIC["Pure Python · NO Spark · runs on a laptop, in tests, and in a preview button"]
+        direction TB
+        TAG["tagger.py — the accountant<br/>apply MY categories to ONE sentence<br/>+ scope filter + roll-up to parent topics"]
+        ENG["rule_engine.py — the calculator<br/>read and evaluate the rule language<br/>AND · NOT · wild* · fuzzy~ · proximity~N"]
+        TAG -->|"asks: does this rule match?"| ENG
+    end
+
+    JOB["voc_topic_model_job.py — the warehouse<br/>run the accountant over MILLIONS of rows on Spark"]
+    LOCAL["run_local.py — laptop / CSVs"]
+    INC["incremental_rule_job.py — re-tag only what changed"]
+
+    CM -->|"loaded at runtime"| TAG
+    JOB -->|"calls per row (pandas_udf)"| TAG
+    LOCAL --> TAG
+    INC --> TAG
+```
+
+**How one sentence actually gets tagged:**
+
+```mermaid
+flowchart LR
+    S["a sentence<br/>+ its metadata"] --> SCOPE{"in scope?<br/>English · audio ·<br/>customer-side"}
+    SCOPE -->|no| SKIP["skipped"]
+    SCOPE -->|yes| LOOP["for each category,<br/>tagger asks rule_engine:<br/>does this rule match?"]
+    LOOP --> ENG["rule_engine evaluates<br/>keywords AND and AND and2<br/>AND NOT(not)"]
+    ENG --> OUT["tags + the words that matched<br/>(the 'why') + roll-up to parents"]
+```
+
+### Why split it up? Why not just put everything in the Spark job?
+
+You *could* put all of this inside `voc_topic_model_job.py` — it would even run. But keeping the logic (`rule_engine` + `tagger`) in their own files and **free of any Spark dependency** buys four things that matter a lot here:
+
+1. **Test a rule in a fraction of a second, with no cluster.** The matching logic runs on a laptop (`run_local.py`) — and could run behind a "preview this rule" button in a UI. If it lived only inside the Spark job, you'd have to start a cluster (slow, and it costs money) just to check whether one rule tags one sentence.
+2. **Unit-test the fiddly parts in isolation.** Proximity (`"hotel room"~2`), wildcards, and fuzzy matching are easy to get subtly wrong. Because they live in `rule_engine.py`, `test_rule_engine.py` can check them directly.
+3. **One source of truth, reused everywhere.** The local runner, the Spark job, the incremental re-tag job, **and the AI tracks** all import the *same* `tagger`/`rule_engine`. No copy-paste, so they can't drift apart and start disagreeing.
+4. **Local equals production, guaranteed.** The *same* pure-Python code runs on your laptop and on the cluster, so a local preview is byte-identical to what production does — no "worked on my machine, tagged differently in prod."
+
+### What actually changes when the rules change?
+
+**Only `shared/category_model.json`.** `rule_engine.py` is frozen machinery — it's the language *interpreter*, it has **zero rules baked into it**, and it never even opens the file. `tagger.py` is the one that reads the JSON and feeds each rule string into the calculator. That clean separation is exactly what makes a no-code, UI-based rule editor feasible: a business user edits *data* (keyword lanes), and the engine underneath never moves.
+
+> One structural caveat: editing a rule's *keywords* touches only the JSON. But **adding/removing a whole category** also adds/removes a column in the output table (and anything hardcoding category ids downstream), and **changing the global scope filter** forces a full re-tag instead of an incremental one.
+
+---
+
 ## How the pieces fit together
 
 ```

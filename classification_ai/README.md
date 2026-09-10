@@ -12,6 +12,54 @@ category-loading + prompt code lives in `ai_common.py`.
 
 ---
 
+## What makes it "AI" — same taxonomy, different fields
+
+Both AI tracks classify against the **same** `shared/category_model.json` that the rule
+engine uses — but the AI reads a **different part of it**. `ai_classify` (via
+`build_labels_json` → `load_categories`) pulls only **`{name: description}`** — the
+plain-English business definition. **It never sees the keyword lanes.** The rule engine
+does the opposite: it runs the **`lanes`** (keywords / and / and2 / not) and treats the
+`description` as a comment.
+
+They read different parts of `category_model.json`:
+
+| Field in each node | Rule engine uses it? | `ai_classify` uses it? |
+|---|---|---|
+| `lanes` (keywords / and / and2 / not) | ✅ **this is the rule** | ❌ never sees it |
+| `description` (business definition) | ❌ just documentation | ✅ **this is what it sends the model** |
+| `name` | for output | ✅ the label |
+| `path` (hierarchy) | ✅ roll-up | ✅ roll-up |
+
+So the **"AI part" is semantic judgment instead of literal matching.** Rather than testing
+whether a sentence contains specific tokens/phrases (with AND/NOT/wildcard/proximity
+conditions), the hosted model reads the label's *definition* and decides, **by meaning**,
+whether the sentence fits. That's why it catches paraphrases the keyword rules miss — and
+also why it's non-deterministic and can over-tag.
+
+Concrete contrast, the "Confusing" category:
+
+- **Rule engine** sees the lanes: `confused, confusing, "makes no sense", bewilder*, …
+  NOT ("no confusion")` → fires only on those literal terms.
+- **`ai_classify`** sees only the description: *"Customer mentions of being confused or
+  feeling like something does not make sense; EXCLUDE dealer and Roadside."* → the model
+  judges meaning.
+
+| Sentence | Rule engine | `ai_classify` |
+|---|---|---|
+| *"I'm totally lost on what you just explained."* | **misses** (no keyword) | **catches** (understands it's confusion) |
+| *"I do not know."* | correctly ignores | can **over-tag** (semantic drift) |
+
+**Bottom line: same taxonomy, two engines.** Rules = deterministic keyword matching
+(consistent, brittle to new phrasing); AI = semantic matching (handles paraphrase, needs
+validation, costs per call). Because `ai_classify` runs on the *definition* (plus the
+global `instructions` in `ai_classify.py`), **that wording is where all of its quality
+lives** — loosening or tightening it moves results dramatically. For the rule engine the
+description is inert; the lanes do the work. See
+[`../classification_rule_engine/README.md`](../classification_rule_engine/README.md) for
+the matching engine.
+
+---
+
 ## The two approaches
 
 Both classify against the **same** `shared/category_model.json`, **dedup** first

@@ -162,15 +162,25 @@ def sentence_by_sentence(out_table="validation_sentence_by_sentence"):
         f"MAX(CASE WHEN Category_Name='{disp}' THEN 1 ELSE 0 END) q_{SHORT[col]}"
         for col, disp in LEAVES)
     # Each method CTE: cast the three keys + rename its leaf cols with a method prefix.
+    # The spine (with_words) also carries the source words + document_date for display.
     def cte(sid_table, pfx, with_words=False):
         leaves = ", ".join(f"{col} {pfx}_{SHORT[col]}" for col, _ in LEAVES)
-        words  = ", words" if with_words else ""
-        return (f"SELECT {KEYS % ('sentence_id','natural_id','id_verbatim')}{words}, "
+        extra  = ", words, document_date" if with_words else ""
+        return (f"SELECT {KEYS % ('sentence_id','natural_id','id_verbatim')}{extra}, "
                 f"{leaves} FROM {out}.{sid_table}")
     # Final projection: for each leaf, the four methods side by side.
+    #   qualtrics / rule -> COALESCE to 0. A NULL there is only an artifact of how those
+    #     sources are stored (Qualtrics keeps positives-only rows; the rule engine persists
+    #     only in-scope rows), NOT "sentence absent" — both evaluated every sentence, so
+    #     "not tagged" is 0.
+    #   ai_query -> left as-is. ai_query only ran on the hour_start-hour_end window, so a
+    #     NULL genuinely means "ai_query never processed this sentence" (see document_date_ts
+    #     and the ai_query_ran flag). Forcing it to 0 would misrepresent "not run" as "said no".
     proj = ", ".join(
-        f"q.q_{SHORT[col]} AS {SHORT[col]}_qualtrics, r.r_{SHORT[col]} AS {SHORT[col]}_rule, "
-        f"a.a_{SHORT[col]} AS {SHORT[col]}_ai_classify, y.y_{SHORT[col]} AS {SHORT[col]}_ai_query"
+        f"COALESCE(q.q_{SHORT[col]},0) AS {SHORT[col]}_qualtrics, "
+        f"COALESCE(r.r_{SHORT[col]},0) AS {SHORT[col]}_rule, "
+        f"a.a_{SHORT[col]} AS {SHORT[col]}_ai_classify, "
+        f"y.y_{SHORT[col]} AS {SHORT[col]}_ai_query"
         for col, _ in LEAVES)
     spark.sql(f"""
       CREATE OR REPLACE TABLE {out}.{out_table} AS
@@ -180,6 +190,7 @@ def sentence_by_sentence(out_table="validation_sentence_by_sentence"):
       r AS ({cte('voc_classification_rule_tags_20260611_sid',        'r')}),
       y AS ({cte('voc_classification_ai_query_sql_tags_sid',         'y')})
       SELECT a.sid AS sentence_id, a.nid AS natural_id, a.vid AS id_verbatim, a.words,
+        to_timestamp(a.document_date) AS document_date_ts,
         {proj},
         CASE WHEN y.sid IS NULL THEN 0 ELSE 1 END AS ai_query_ran,
         current_timestamp() AS computed_at
@@ -197,7 +208,7 @@ sentence_by_sentence()
 
 # COMMAND ----------
 display(spark.sql(f"""
-  SELECT substr(words,1,80) sentence,
+  SELECT document_date_ts, substr(words,1,80) sentence,
     confusing_qualtrics, confusing_rule, confusing_ai_classify, confusing_ai_query,
     points_qualtrics, points_rule, points_ai_classify, points_ai_query
   FROM {out}.validation_sentence_by_sentence

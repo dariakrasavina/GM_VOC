@@ -223,8 +223,8 @@ def run():
             F.concat_ws("; ", F.coalesce(F.col("_tags.topics").getItem(tid),
                                          F.array().cast("array<string>"))))
 
-    keep = [JOIN_KEY, "id_document", "id_verbatim", "document_date", "language",
-            "verbatimtype", "id_source", TEXT_FIELD, "in_scope"]
+    keep = [JOIN_KEY, "id_document", "id_verbatim", "sentence_id", "document_date",
+            "language", "verbatimtype", "id_source", TEXT_FIELD, "in_scope"]
     keep = [c for c in keep if c in tagged.columns]
     tagged_out = tagged.select(*keep, *topic_ids, *[t + "__terms" for t in topic_ids])
 

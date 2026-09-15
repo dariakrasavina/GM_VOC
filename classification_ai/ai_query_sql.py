@@ -152,7 +152,7 @@ def build_statements(params):
 
     s_scoped = (
         "CREATE OR REPLACE TABLE %s AS "
-        "SELECT natural_id, id_document, id_verbatim, document_date, %s "
+        "SELECT natural_id, id_document, id_verbatim, sentence_id, document_date, %s "
         "FROM %s WHERE %s" % (scoped_tmp, TEXT_FIELD, sent, where))
 
     # Per-category 0/1 columns (roll-up compiled to arrays_overlap), aliased to
@@ -182,15 +182,15 @@ def build_statements(params):
         order = "ORDER BY rand()" if sample_mode == "random" else ""
         s_bysentence = (
             "CREATE OR REPLACE TABLE %s AS "
-            "SELECT natural_id, id_document, id_verbatim, document_date, %s, "
+            "SELECT natural_id, id_document, id_verbatim, sentence_id, document_date, %s, "
             "from_json(CAST(ai_query('%s', concat(:prompt, ctx)) AS STRING), "
             "'array<string>') AS ai_categories "
-            "FROM (SELECT natural_id, id_document, id_verbatim, document_date, %s, "
+            "FROM (SELECT natural_id, id_document, id_verbatim, sentence_id, document_date, %s, "
             "%s AS ctx FROM %s %s %s)"
             % (byrow_tmp, TEXT_FIELD, ep, TEXT_FIELD, ctx_expr, scoped_tmp, order, lim))
         s_final = (
             "CREATE OR REPLACE TABLE %s AS "
-            "SELECT b.natural_id, b.id_document, b.id_verbatim, b.document_date, b.%s, "
+            "SELECT b.natural_id, b.id_document, b.id_verbatim, b.sentence_id, b.document_date, b.%s, "
             "to_json(b.ai_categories) AS ai_categories, %s FROM %s b"
             % (tags, TEXT_FIELD, _col_exprs("b"), byrow_tmp))
         drops = ["DROP TABLE IF EXISTS %s" % byrow_tmp,
@@ -217,7 +217,7 @@ def build_statements(params):
         % (bysentence_tmp, TEXT_FIELD, ep, TEXT_FIELD, inner))
     s_final = (
         "CREATE OR REPLACE TABLE %s AS "
-        "SELECT s.natural_id, s.id_document, s.id_verbatim, s.document_date, s.%s, "
+        "SELECT s.natural_id, s.id_document, s.id_verbatim, s.sentence_id, s.document_date, s.%s, "
         "to_json(b.ai_categories) AS ai_categories, %s "
         "FROM %s s JOIN %s b ON s.%s = b.%s"
         % (tags, TEXT_FIELD, _col_exprs("b"),

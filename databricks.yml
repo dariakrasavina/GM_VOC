@@ -321,6 +321,33 @@ resources:
         enabled: true
 
     # ----------------------------------------------------------------------
+    # Qualtrics validation — sentence-level comparison of each tagging method
+    # (rule engine / ai_classify / ai_query) vs the Qualtrics control output.
+    # Backfills sentence_id onto each method's tags (via the source table), joins
+    # to qualtrics_raw_outputs on sentence_id, and writes precision/recall/F1 per
+    # method x leaf to validation_qualtrics_vs_{ai_classify,ai_query,rule_engine}.
+    # Run AFTER the tag tables + qualtrics_raw_outputs exist.
+    # ----------------------------------------------------------------------
+    voc_qualtrics_validation_job:
+      name: "[${bundle.target}] GM VOC Qualtrics Validation (sentence-level)"
+      tasks:
+        - task_key: qualtrics_validation
+          notebook_task:
+            notebook_path: ./validation/qualtrics_validation_notebook.py
+            base_parameters:
+              source_table: ${var.catalog}.${var.schema}.${var.sentence_table_name}
+              qualtrics_table: ${var.target_catalog}.${var.target_schema}.qualtrics_raw_outputs
+              out_schema: ${var.target_catalog}.${var.target_schema}
+              ai_classify_tags: ${var.target_catalog}.${var.target_schema}.voc_classification_ai_classify_tags_full_day
+              ai_query_tags: ${var.target_catalog}.${var.target_schema}.voc_classification_ai_query_sql_tags
+              rule_tags: ${var.target_catalog}.${var.target_schema}.voc_classification_rule_tags_v2
+              classify_date: ${var.ai_classify_date}
+              hour_start: "9"
+              hour_end: "12"
+      queue:
+        enabled: true
+
+    # ----------------------------------------------------------------------
     # Sentiment model — complementary track (how the customer feels).
     # train: weak-label via LLM -> fine-tune DistilBERT -> log/register in MLflow.
     # score: apply the registered model + VADER baseline.

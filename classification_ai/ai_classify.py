@@ -271,7 +271,7 @@ def build_statements(params):
 
     s_scoped = (
         "CREATE OR REPLACE TABLE %s AS "
-        "SELECT natural_id, id_document, id_verbatim, document_date, %s "
+        "SELECT natural_id, id_document, id_verbatim, sentence_id, document_date, %s "
         "FROM %s WHERE %s" % (scoped_tmp, TEXT_FIELD, sent, where))
 
     # The paid step: one ai_classify() per DISTINCT sentence. v2.1 multi-label with
@@ -310,7 +310,7 @@ def build_statements(params):
 
     s_final = (
         "CREATE OR REPLACE TABLE %s AS "
-        "SELECT s.natural_id, s.id_document, s.id_verbatim, s.document_date, s.%s, "
+        "SELECT s.natural_id, s.id_document, s.id_verbatim, s.sentence_id, s.document_date, s.%s, "
         "to_json(b.ai_labels) AS ai_labels, b.ai_result_json, b.ai_error, %s "
         "FROM %s s JOIN %s b ON s.%s = b.%s"
         % (tags, TEXT_FIELD, ", ".join(col_exprs),

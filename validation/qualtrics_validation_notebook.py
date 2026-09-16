@@ -7,11 +7,13 @@
 # MAGIC and writes precision / recall / F1 per method × leaf to three result tables.
 # MAGIC
 # MAGIC **Why this notebook exists:** the tagging output tables dropped `sentence_id` (they keep
-# MAGIC natural_id / id_verbatim / id_document / words). Qualtrics is keyed by `Sentence_ID`, so to
-# MAGIC compare at true sentence grain we first **backfill `sentence_id`** onto each method's tags by
-# MAGIC joining the SOURCE sentence table (which has `sentence_id`) to a per-distinct-sentence tag map
-# MAGIC (keyed by `words`). Driving from the source — one unique `sentence_id` per row — avoids the
-# MAGIC ~4.6% duplicate-text fan-out that a reverse join would cause.
+# MAGIC natural_id / id_document / id_verbatim / document_date / words). Qualtrics is keyed by
+# MAGIC `Sentence_ID`, so to compare at true sentence grain we first **backfill `sentence_id`** onto
+# MAGIC each method's tags. Step 1 does this by pairing each result-table row to a source
+# MAGIC `sentence_id` with `row_number()` within the composite key, so each `_sid` table keeps
+# MAGIC **exactly** its result table's row count with a **unique** `sentence_id` (see Step 1 for the
+# MAGIC why — the composite key alone collides ~8% of the time). The permanent fix is to re-run the
+# MAGIC tagging jobs, which now emit `sentence_id` natively.
 # MAGIC
 # MAGIC Scope is defined by the `sentence_id` join (each method's `_sid` table is its own population),
 # MAGIC so no timezone-sensitive date filtering of Qualtrics is needed. Qualtrics is the ground truth:
@@ -54,35 +56,65 @@ LEAVES = [
 
 # COMMAND ----------
 # MAGIC %md
-# MAGIC ## Step 1 — Backfill `sentence_id` onto each method's tags (source-driven map-join)
-# MAGIC Rebuilds `<method>_sid` tables: SOURCE sentences (unique `sentence_id`) LEFT-joined to a
-# MAGIC `words -> tags` map from each method's output. `ai_classify`/`rule` = full day; `ai_query` = the window.
+# MAGIC ## Step 1 — Backfill `sentence_id` onto each method's tags (row-number pairing)
+# MAGIC Rebuilds `<method>_sid` tables so each has **exactly the same row count** as its result
+# MAGIC table (one row in, one row out) and a **unique `sentence_id`** per row.
+# MAGIC
+# MAGIC **Why not join on `words`:** the result tables never stored `sentence_id`; they carry
+# MAGIC `natural_id, id_document, id_verbatim, document_date, words`. But `document_date` is
+# MAGIC *document*-level (all sentences in a call share it) and the only per-sentence discriminator
+# MAGIC in the source (`cb_conv_sentence_start_time_ms`) was not carried into the result tables, so
+# MAGIC that composite key still collides (~8% of rows) wherever identical short text repeats in one
+# MAGIC call. Joining on it (or on `words` alone) fans out / re-populates from the source and inflates
+# MAGIC the row count by ~3%.
+# MAGIC
+# MAGIC **Approach:** build a source lookup keyed by the composite key with a `row_number()` **within
+# MAGIC each key** (`_voc_src_keyed_tmp`), then drive **from the result table** (row_number within the
+# MAGIC same key) and join on `(composite key, rn)`. This is an injective pairing: N identical-text
+# MAGIC rows in a call map to N distinct source `sentence_id`s. Count is preserved exactly; within a
+# MAGIC collision group the specific pairing is arbitrary, but those rows are identical text and carry
+# MAGIC identical tags, so validation metrics are unaffected. (The permanent fix is to re-run the
+# MAGIC tagging jobs, which now emit `sentence_id` natively — then no backfill is needed.)
 
 # COMMAND ----------
-def backfill(method_tags, out_sid, extra_map_col, scope_where):
-    extra_map = f", MAX({extra_map_col}) {extra_map_col}" if extra_map_col else ""
-    extra_sel = f", m.{extra_map_col}" if extra_map_col else ""
+# Build the per-sentence keyed source ONCE (one scan), then reuse for all three methods.
+KEY = "natural_id, id_document, id_verbatim, document_date, words"
+src_keyed = f"{out}._voc_src_keyed_tmp"
+spark.sql(f"""
+  CREATE OR REPLACE TABLE {src_keyed} AS
+  SELECT src.sentence_id, src.natural_id, src.id_document, src.id_verbatim, src.document_date, src.words,
+    row_number() OVER (PARTITION BY src.natural_id, src.id_document, src.id_verbatim,
+                                    src.document_date, src.words ORDER BY src.sentence_id) AS rn
+  FROM {src} src
+  WHERE {DAY} AND {SCOPE} AND lower(src.language)='english'""")
+
+def backfill(method_tags, out_sid, extra_col, day_filter=""):
+    # Drive FROM the result table so the _sid row count == the result-table row count exactly.
+    extra_sel_t = f", {extra_col}" if extra_col else ""
+    extra_sel   = f", t.{extra_col}" if extra_col else ""
+    where = f"WHERE {day_filter}" if day_filter else ""
     spark.sql(f"""
       CREATE OR REPLACE TABLE {out}.{out_sid} AS
-      WITH map AS (
-        SELECT words,
-          MAX(cc_advisor_confusing_makes_no_sense) cc_advisor_confusing_makes_no_sense,
-          MAX(cc_advisor_inaccurate_information)   cc_advisor_inaccurate_information,
-          MAX(points_redeem)                       points_redeem{extra_map}
-        FROM {method_tags}
-        GROUP BY words)
-      SELECT src.sentence_id, src.natural_id, src.id_document, src.id_verbatim, src.document_date, src.words,
-        m.cc_advisor_confusing_makes_no_sense, m.cc_advisor_inaccurate_information, m.points_redeem{extra_sel}
-      FROM {src} src JOIN map m ON src.words = m.words
-      WHERE {scope_where} AND {SCOPE}""")
+      WITH t AS (
+        SELECT natural_id, id_document, id_verbatim, document_date, words,
+          cc_advisor_confusing_makes_no_sense, cc_advisor_inaccurate_information, points_redeem{extra_sel_t},
+          row_number() OVER (PARTITION BY {KEY} ORDER BY words) AS rn
+        FROM {method_tags} {where})
+      SELECT s.sentence_id, t.natural_id, t.id_document, t.id_verbatim, t.document_date, t.words,
+        t.cc_advisor_confusing_makes_no_sense, t.cc_advisor_inaccurate_information, t.points_redeem{extra_sel}
+      FROM t LEFT JOIN {src_keyed} s
+        ON t.natural_id=s.natural_id AND t.id_document=s.id_document AND t.id_verbatim=s.id_verbatim
+       AND t.document_date=s.document_date AND t.words=s.words AND t.rn=s.rn""")
     n = spark.table(f"{out}.{out_sid}").count()
     print(f"  {out_sid}: {n:,} rows")
 
-backfill(ai_classify, "voc_classification_ai_classify_tags_full_day_sid", "ai_labels",     DAY)
-backfill(ai_query,    "voc_classification_ai_query_sql_tags_sid",         "ai_categories", WIN)
-# rule: map only from the validation day so the full-year table isn't scanned
-rule_day = f"(SELECT * FROM {rule} WHERE to_timestamp(document_date) >= '{day_start}' AND to_timestamp(document_date) < {day_next})"
-backfill(rule_day,    "voc_classification_rule_tags_20260611_sid",        None,            DAY)
+# ai_classify / ai_query result tables are already scoped to the day / window.
+backfill(ai_classify, "voc_classification_ai_classify_tags_full_day_sid", "ai_labels")
+backfill(ai_query,    "voc_classification_ai_query_sql_tags_sid",         "ai_categories")
+# rule_tags_v2 spans the full corpus -> restrict to the validation day.
+backfill(rule,        "voc_classification_rule_tags_20260611_sid",        None,
+         day_filter=f"to_date(document_date)='{day}'")
+spark.sql(f"DROP TABLE IF EXISTS {src_keyed}")
 
 # COMMAND ----------
 # MAGIC %md

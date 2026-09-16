@@ -28,8 +28,6 @@ dbutils.widgets.text("ai_classify_tags", "marketing_test.silver_voice_of_custome
 dbutils.widgets.text("ai_query_tags",    "marketing_test.silver_voice_of_customer_gmna.voc_classification_ai_query_sql_tags")
 dbutils.widgets.text("rule_tags",        "marketing_test.silver_voice_of_customer_gmna.voc_classification_rule_tags_v2")
 dbutils.widgets.text("classify_date",    "2026-06-11")   # the day Qualtrics covers
-dbutils.widgets.text("hour_start",       "9")            # ai_query ran only this window
-dbutils.widgets.text("hour_end",         "12")
 # Step 1 (the sentence_id backfill) scans the full source + sorts, so it is the slow,
 # expensive step. It only needs to re-run when the tagging tables are refreshed. Default
 # "false": skip it and run the (fast) comparisons on the existing _sid tables. Set "true"
@@ -43,14 +41,11 @@ ai_classify = dbutils.widgets.get("ai_classify_tags")
 ai_query    = dbutils.widgets.get("ai_query_tags")
 rule        = dbutils.widgets.get("rule_tags")
 day         = dbutils.widgets.get("classify_date")
-hs, he      = int(dbutils.widgets.get("hour_start")), int(dbutils.widgets.get("hour_end"))
 REBUILD_SID = dbutils.widgets.get("rebuild_sid").strip().lower() in ("true", "1", "yes")
 
 day_start = f"{day} 00:00:00"
 day_next  = "date_add(to_date('%s'), 1)" % day
 DAY  = f"to_timestamp(src.document_date) >= '{day_start}' AND to_timestamp(src.document_date) < {day_next}"
-WIN  = (f"to_timestamp(src.document_date) >= '{day} {hs:02d}:00:00' "
-        f"AND to_timestamp(src.document_date) < '{day} {he:02d}:00:00'")
 SCOPE = "lower(src.id_source)='audio' AND lower(src.verbatimtype)='clientverbatim'"
 
 # The three POC leaf categories: our column id  <->  Qualtrics Category_Name
@@ -88,7 +83,17 @@ LEAVES = [
 # Only rebuild the _sid tables when rebuild_sid=true (they change only when the tagging
 # tables are refreshed). A normal run skips this and uses the existing _sid tables, so the
 # job just recomputes the fast comparisons below.
+SID_TABLES = ["voc_classification_ai_classify_tags_full_day_sid",
+              "voc_classification_ai_query_sql_tags_sid",
+              "voc_classification_rule_tags_20260611_sid"]
 if not REBUILD_SID:
+    # Guard: Steps 2-4 read the _sid tables, so they must already exist when we skip Step 1.
+    missing = [t for t in SID_TABLES if not spark.catalog.tableExists(f"{out}.{t}")]
+    if missing:
+        raise RuntimeError(
+            "rebuild_sid=false but these _sid tables do not exist yet: %s. "
+            "Run once with rebuild_sid=true (ideally on a SQL warehouse) to build them first."
+            % ", ".join(missing))
     print("rebuild_sid=false -> skipping Step 1; using existing _sid tables. "
           "Set rebuild_sid=true (ideally on a SQL warehouse) after refreshing the tagging tables.")
 else:
@@ -123,13 +128,16 @@ else:
         n = spark.table(f"{out}.{out_sid}").count()
         print(f"  {out_sid}: {n:,} rows")
 
-    # ai_classify / ai_query result tables are already scoped to the day / window.
-    backfill(ai_classify, "voc_classification_ai_classify_tags_full_day_sid", "ai_labels")
-    backfill(ai_query,    "voc_classification_ai_query_sql_tags_sid",         "ai_categories")
-    # rule_tags_v2 spans the full corpus -> restrict to the validation day.
-    backfill(rule,        "voc_classification_rule_tags_20260611_sid",        None,
-             day_filter=f"to_date(document_date)='{day}'")
-    spark.sql(f"DROP TABLE IF EXISTS {src_keyed}")
+    try:
+        # ai_classify / ai_query result tables are already scoped to the day / window.
+        backfill(ai_classify, "voc_classification_ai_classify_tags_full_day_sid", "ai_labels")
+        backfill(ai_query,    "voc_classification_ai_query_sql_tags_sid",         "ai_categories")
+        # rule_tags_v2 spans the full corpus -> restrict to the validation day.
+        backfill(rule,        "voc_classification_rule_tags_20260611_sid",        None,
+                 day_filter=f"to_date(document_date)='{day}'")
+    finally:
+        # Always clean up the temp table, even if a backfill fails partway.
+        spark.sql(f"DROP TABLE IF EXISTS {src_keyed}")
 
 # COMMAND ----------
 # MAGIC %md
@@ -172,7 +180,11 @@ def compare_and_write(method_sid, method_label, out_table):
     spark.sql(f"""
       CREATE OR REPLACE TABLE {out}.{out_table} AS
       WITH q AS (SELECT CAST(Sentence_ID AS BIGINT) sid, {qcase} FROM {qtab} GROUP BY CAST(Sentence_ID AS BIGINT)),
-      j AS (SELECT {jsel} FROM {out}.{method_sid} m LEFT JOIN q ON m.sentence_id = q.sid)
+      -- Exclude rows whose sentence_id could not be paired to the source (rare, rule only):
+      -- they cannot be matched to Qualtrics and would otherwise be miscounted as method-only
+      -- false positives here while being dropped from the sentence-by-sentence view (Step 4).
+      j AS (SELECT {jsel} FROM {out}.{method_sid} m LEFT JOIN q ON m.sentence_id = q.sid
+            WHERE m.sentence_id IS NOT NULL)
       SELECT method, leaf_category, qualtrics_positives, method_positives, true_positives,
              false_positives_method_only, false_negatives_qualtrics_only,
              precision_pct, recall_pct, f1_pct, computed_at
@@ -193,12 +205,15 @@ compare_and_write("voc_classification_rule_tags_20260611_sid",        "rule_engi
 # MAGIC **The spine is the SOURCE table** (`source_table`) scoped to the day + audio + client-side +
 # MAGIC English — the canonical population of every in-scope sentence that day, keyed by the source's
 # MAGIC native (unique) `sentence_id`. Every method — ai_classify included — is a LEFT JOIN onto it by
-# MAGIC `sentence_id`, so a sentence that any method never tagged still appears (all-zero row), and
-# MAGIC ai_classify's own coverage gap is visible rather than hidden by using it as the spine.
+# MAGIC `sentence_id`, so a sentence that no method tagged still appears (all-zero row), rather than the
+# MAGIC population being defined by one method's output.
 # MAGIC
-# MAGIC `qualtrics` / `rule` / `ai_classify` are `COALESCE`d to 0 (full-day coverage, so absent = not
-# MAGIC tagged). `ai_query` ran only on the `hour_start`-`hour_end` window, so it is left NULL outside
-# MAGIC it (genuinely not run); `ai_query_ran` = 1 flags the rows where it produced output.
+# MAGIC `qualtrics` / `rule` / `ai_classify` are `COALESCE`d to 0 — these methods score the full day, so
+# MAGIC a missing row is read as "not tagged" (0). Note this means a method's rare *coverage gap* (a
+# MAGIC sentence it never emitted, e.g. ai_classify covers 2,110,968 of 2,115,610) reads the same as a
+# MAGIC true "tagged negative"; the gap shows up only as the difference in each method's positives, not
+# MAGIC per-row. `ai_query` ran only on a limited window, so it is left NULL outside it (genuinely not
+# MAGIC run); `ai_query_ran` = 1 flags the rows where it produced output.
 
 # COMMAND ----------
 # Short, readable per-leaf name for the four side-by-side columns.

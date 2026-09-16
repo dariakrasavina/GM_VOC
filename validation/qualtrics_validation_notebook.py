@@ -186,65 +186,67 @@ compare_and_write("voc_classification_rule_tags_20260611_sid",        "rule_engi
 # COMMAND ----------
 # MAGIC %md
 # MAGIC ## Step 4 — Sentence-by-sentence side-by-side (all four methods on one row)
-# MAGIC One row per sentence, joined on **sentence_id + natural_id + id_verbatim**, with each leaf
-# MAGIC shown four ways: `<leaf>_qualtrics`, `<leaf>_rule`, `<leaf>_ai_classify`, `<leaf>_ai_query`.
-# MAGIC This is the row-level view ("how did the same sentence get tagged?") behind the aggregate
-# MAGIC precision/recall tables above. The spine is the full-day `ai_classify` population (every
-# MAGIC in-scope sentence). `ai_query` only ran on the `hour_start`-`hour_end` window, so its columns
-# MAGIC are NULL outside it — `ai_query_ran` = 1 flags the rows where all four methods are populated.
+# MAGIC One row per sentence, with each leaf shown four ways: `<leaf>_qualtrics`, `<leaf>_rule`,
+# MAGIC `<leaf>_ai_classify`, `<leaf>_ai_query`. This is the row-level view ("how did the same
+# MAGIC sentence get tagged?") behind the aggregate precision/recall tables above.
 # MAGIC
-# MAGIC (Joining on all three keys was verified to drop nothing vs `sentence_id` alone: `sentence_id`
-# MAGIC is globally unique per sentence, so `natural_id`/`id_verbatim` act as a correctness guard.)
+# MAGIC **The spine is the SOURCE table** (`source_table`) scoped to the day + audio + client-side +
+# MAGIC English — the canonical population of every in-scope sentence that day, keyed by the source's
+# MAGIC native (unique) `sentence_id`. Every method — ai_classify included — is a LEFT JOIN onto it by
+# MAGIC `sentence_id`, so a sentence that any method never tagged still appears (all-zero row), and
+# MAGIC ai_classify's own coverage gap is visible rather than hidden by using it as the spine.
+# MAGIC
+# MAGIC `qualtrics` / `rule` / `ai_classify` are `COALESCE`d to 0 (full-day coverage, so absent = not
+# MAGIC tagged). `ai_query` ran only on the `hour_start`-`hour_end` window, so it is left NULL outside
+# MAGIC it (genuinely not run); `ai_query_ran` = 1 flags the rows where it produced output.
 
 # COMMAND ----------
 # Short, readable per-leaf name for the four side-by-side columns.
 SHORT = {"cc_advisor_confusing_makes_no_sense": "confusing",
          "cc_advisor_inaccurate_information":   "inaccurate",
          "points_redeem":                       "points"}
-KEYS = ("CAST(%s AS STRING) sid, trim(CAST(%s AS STRING)) nid, trim(CAST(%s AS STRING)) vid")
 
 def sentence_by_sentence(out_table="validation_sentence_by_sentence"):
-    # Qualtrics pivoted to one row per (sentence, natural, verbatim), 0/1 per leaf.
+    # Qualtrics pivoted to 0/1 per leaf, keyed by sentence_id.
     qcase = ", ".join(
         f"MAX(CASE WHEN Category_Name='{disp}' THEN 1 ELSE 0 END) q_{SHORT[col]}"
         for col, disp in LEAVES)
-    # Each method CTE: cast the three keys + rename its leaf cols with a method prefix.
-    # The spine (with_words) also carries the source words + document_date for display.
-    def cte(sid_table, pfx, with_words=False):
-        leaves = ", ".join(f"{col} {pfx}_{SHORT[col]}" for col, _ in LEAVES)
-        extra  = ", words, document_date" if with_words else ""
-        return (f"SELECT {KEYS % ('sentence_id','natural_id','id_verbatim')}{extra}, "
-                f"{leaves} FROM {out}.{sid_table}")
-    # Final projection: for each leaf, the four methods side by side.
-    #   qualtrics / rule -> COALESCE to 0. A NULL there is only an artifact of how those
-    #     sources are stored (Qualtrics keeps positives-only rows; the rule engine persists
-    #     only in-scope rows), NOT "sentence absent" — both evaluated every sentence, so
-    #     "not tagged" is 0.
-    #   ai_query -> left as-is. ai_query only ran on the hour_start-hour_end window, so a
-    #     NULL genuinely means "ai_query never processed this sentence" (see document_date_ts
-    #     and the ai_query_ran flag). Forcing it to 0 would misrepresent "not run" as "said no".
+    # Each method's _sid contributes its leaf columns, keyed by sentence_id.
+    def method_cte(sid_table, pfx):
+        cols = ", ".join(f"{col} {pfx}_{SHORT[col]}" for col, _ in LEAVES)
+        return f"SELECT sentence_id, {cols} FROM {out}.{sid_table}"
+    # Projection: each leaf four ways. qualtrics / rule / ai_classify -> COALESCE to 0 (they
+    # cover the full day, so a missing row = "not tagged" = 0). ai_query -> left NULL outside
+    # its hour window (genuinely not run; see document_date_ts + ai_query_ran).
     proj = ", ".join(
         f"COALESCE(q.q_{SHORT[col]},0) AS {SHORT[col]}_qualtrics, "
         f"COALESCE(r.r_{SHORT[col]},0) AS {SHORT[col]}_rule, "
-        f"a.a_{SHORT[col]} AS {SHORT[col]}_ai_classify, "
+        f"COALESCE(a.a_{SHORT[col]},0) AS {SHORT[col]}_ai_classify, "
         f"y.y_{SHORT[col]} AS {SHORT[col]}_ai_query"
         for col, _ in LEAVES)
+    # Spine = the SOURCE sentences for the day (audio, client-side, English), one row per
+    # native sentence_id. Every method LEFT-joins onto it by sentence_id.
     spark.sql(f"""
       CREATE OR REPLACE TABLE {out}.{out_table} AS
-      WITH q AS (SELECT {KEYS % ('Sentence_ID','Natural_Id','Verbatim_ID')}, {qcase}
-                 FROM {qtab} GROUP BY 1,2,3),
-      a AS ({cte('voc_classification_ai_classify_tags_full_day_sid', 'a', with_words=True)}),
-      r AS ({cte('voc_classification_rule_tags_20260611_sid',        'r')}),
-      y AS ({cte('voc_classification_ai_query_sql_tags_sid',         'y')})
-      SELECT a.sid AS sentence_id, a.nid AS natural_id, a.vid AS id_verbatim, a.words,
-        to_timestamp(a.document_date) AS document_date_ts,
+      WITH src AS (
+        SELECT sentence_id, natural_id, id_verbatim, words, document_date
+        FROM {src}
+        WHERE to_date(document_date)='{day}' AND lower(id_source)='audio'
+          AND lower(verbatimtype)='clientverbatim' AND lower(language)='english'),
+      q AS (SELECT CAST(Sentence_ID AS BIGINT) sid, {qcase} FROM {qtab} GROUP BY 1),
+      a AS ({method_cte('voc_classification_ai_classify_tags_full_day_sid', 'a')}),
+      r AS ({method_cte('voc_classification_rule_tags_20260611_sid',        'r')}),
+      y AS ({method_cte('voc_classification_ai_query_sql_tags_sid',         'y')})
+      SELECT src.sentence_id, src.natural_id, src.id_verbatim, src.words,
+        to_timestamp(src.document_date) AS document_date_ts,
         {proj},
-        CASE WHEN y.sid IS NULL THEN 0 ELSE 1 END AS ai_query_ran,
+        CASE WHEN y.sentence_id IS NULL THEN 0 ELSE 1 END AS ai_query_ran,
         current_timestamp() AS computed_at
-      FROM a
-      LEFT JOIN r ON a.sid=r.sid AND a.nid=r.nid AND a.vid=r.vid
-      LEFT JOIN y ON a.sid=y.sid AND a.nid=y.nid AND a.vid=y.vid
-      LEFT JOIN q ON a.sid=q.sid AND a.nid=q.nid AND a.vid=q.vid""")
+      FROM src
+      LEFT JOIN q ON src.sentence_id = q.sid
+      LEFT JOIN a ON src.sentence_id = a.sentence_id
+      LEFT JOIN r ON src.sentence_id = r.sentence_id
+      LEFT JOIN y ON src.sentence_id = y.sentence_id""")
     print(f"  wrote {out}.{out_table} ({spark.table(f'{out}.{out_table}').count():,} rows)")
 
 sentence_by_sentence()

@@ -30,6 +30,11 @@ dbutils.widgets.text("rule_tags",        "marketing_test.silver_voice_of_custome
 dbutils.widgets.text("classify_date",    "2026-06-11")   # the day Qualtrics covers
 dbutils.widgets.text("hour_start",       "9")            # ai_query ran only this window
 dbutils.widgets.text("hour_end",         "12")
+# Step 1 (the sentence_id backfill) scans the full source + sorts, so it is the slow,
+# expensive step. It only needs to re-run when the tagging tables are refreshed. Default
+# "false": skip it and run the (fast) comparisons on the existing _sid tables. Set "true"
+# to rebuild the _sid tables (ideally on the SQL warehouse, where the sort is quick).
+dbutils.widgets.text("rebuild_sid",      "false")
 
 src         = dbutils.widgets.get("source_table")
 qtab        = dbutils.widgets.get("qualtrics_table")
@@ -39,6 +44,7 @@ ai_query    = dbutils.widgets.get("ai_query_tags")
 rule        = dbutils.widgets.get("rule_tags")
 day         = dbutils.widgets.get("classify_date")
 hs, he      = int(dbutils.widgets.get("hour_start")), int(dbutils.widgets.get("hour_end"))
+REBUILD_SID = dbutils.widgets.get("rebuild_sid").strip().lower() in ("true", "1", "yes")
 
 day_start = f"{day} 00:00:00"
 day_next  = "date_add(to_date('%s'), 1)" % day
@@ -57,8 +63,10 @@ LEAVES = [
 # COMMAND ----------
 # MAGIC %md
 # MAGIC ## Step 1 — Backfill `sentence_id` onto each method's tags (row-number pairing)
-# MAGIC Rebuilds `<method>_sid` tables so each has **exactly the same row count** as its result
-# MAGIC table (one row in, one row out) and a **unique `sentence_id`** per row.
+# MAGIC **Opt-in — runs only when `rebuild_sid=true`** (this is the slow step: full source scan + sort).
+# MAGIC A normal run skips it and uses the existing `_sid` tables; rebuild only after the tagging
+# MAGIC tables are refreshed. Rebuilds `<method>_sid` tables so each has **exactly the same row count**
+# MAGIC as its result table (one row in, one row out) and a **unique `sentence_id`** per row.
 # MAGIC
 # MAGIC **Why not join on `words`:** the result tables never stored `sentence_id`; they carry
 # MAGIC `natural_id, id_document, id_verbatim, document_date, words`. But `document_date` is
@@ -77,44 +85,51 @@ LEAVES = [
 # MAGIC tagging jobs, which now emit `sentence_id` natively — then no backfill is needed.)
 
 # COMMAND ----------
-# Build the per-sentence keyed source ONCE (one scan), then reuse for all three methods.
-KEY = "natural_id, id_document, id_verbatim, document_date, words"
-src_keyed = f"{out}._voc_src_keyed_tmp"
-spark.sql(f"""
-  CREATE OR REPLACE TABLE {src_keyed} AS
-  SELECT src.sentence_id, src.natural_id, src.id_document, src.id_verbatim, src.document_date, src.words,
-    row_number() OVER (PARTITION BY src.natural_id, src.id_document, src.id_verbatim,
-                                    src.document_date, src.words ORDER BY src.sentence_id) AS rn
-  FROM {src} src
-  WHERE {DAY} AND {SCOPE} AND lower(src.language)='english'""")
-
-def backfill(method_tags, out_sid, extra_col, day_filter=""):
-    # Drive FROM the result table so the _sid row count == the result-table row count exactly.
-    extra_sel_t = f", {extra_col}" if extra_col else ""
-    extra_sel   = f", t.{extra_col}" if extra_col else ""
-    where = f"WHERE {day_filter}" if day_filter else ""
+# Only rebuild the _sid tables when rebuild_sid=true (they change only when the tagging
+# tables are refreshed). A normal run skips this and uses the existing _sid tables, so the
+# job just recomputes the fast comparisons below.
+if not REBUILD_SID:
+    print("rebuild_sid=false -> skipping Step 1; using existing _sid tables. "
+          "Set rebuild_sid=true (ideally on a SQL warehouse) after refreshing the tagging tables.")
+else:
+    # Build the per-sentence keyed source ONCE (one scan), then reuse for all three methods.
+    KEY = "natural_id, id_document, id_verbatim, document_date, words"
+    src_keyed = f"{out}._voc_src_keyed_tmp"
     spark.sql(f"""
-      CREATE OR REPLACE TABLE {out}.{out_sid} AS
-      WITH t AS (
-        SELECT natural_id, id_document, id_verbatim, document_date, words,
-          cc_advisor_confusing_makes_no_sense, cc_advisor_inaccurate_information, points_redeem{extra_sel_t},
-          row_number() OVER (PARTITION BY {KEY} ORDER BY words) AS rn
-        FROM {method_tags} {where})
-      SELECT s.sentence_id, t.natural_id, t.id_document, t.id_verbatim, t.document_date, t.words,
-        t.cc_advisor_confusing_makes_no_sense, t.cc_advisor_inaccurate_information, t.points_redeem{extra_sel}
-      FROM t LEFT JOIN {src_keyed} s
-        ON t.natural_id=s.natural_id AND t.id_document=s.id_document AND t.id_verbatim=s.id_verbatim
-       AND t.document_date=s.document_date AND t.words=s.words AND t.rn=s.rn""")
-    n = spark.table(f"{out}.{out_sid}").count()
-    print(f"  {out_sid}: {n:,} rows")
+      CREATE OR REPLACE TABLE {src_keyed} AS
+      SELECT src.sentence_id, src.natural_id, src.id_document, src.id_verbatim, src.document_date, src.words,
+        row_number() OVER (PARTITION BY src.natural_id, src.id_document, src.id_verbatim,
+                                        src.document_date, src.words ORDER BY src.sentence_id) AS rn
+      FROM {src} src
+      WHERE {DAY} AND {SCOPE} AND lower(src.language)='english'""")
 
-# ai_classify / ai_query result tables are already scoped to the day / window.
-backfill(ai_classify, "voc_classification_ai_classify_tags_full_day_sid", "ai_labels")
-backfill(ai_query,    "voc_classification_ai_query_sql_tags_sid",         "ai_categories")
-# rule_tags_v2 spans the full corpus -> restrict to the validation day.
-backfill(rule,        "voc_classification_rule_tags_20260611_sid",        None,
-         day_filter=f"to_date(document_date)='{day}'")
-spark.sql(f"DROP TABLE IF EXISTS {src_keyed}")
+    def backfill(method_tags, out_sid, extra_col, day_filter=""):
+        # Drive FROM the result table so the _sid row count == the result-table row count exactly.
+        extra_sel_t = f", {extra_col}" if extra_col else ""
+        extra_sel   = f", t.{extra_col}" if extra_col else ""
+        where = f"WHERE {day_filter}" if day_filter else ""
+        spark.sql(f"""
+          CREATE OR REPLACE TABLE {out}.{out_sid} AS
+          WITH t AS (
+            SELECT natural_id, id_document, id_verbatim, document_date, words,
+              cc_advisor_confusing_makes_no_sense, cc_advisor_inaccurate_information, points_redeem{extra_sel_t},
+              row_number() OVER (PARTITION BY {KEY} ORDER BY words) AS rn
+            FROM {method_tags} {where})
+          SELECT s.sentence_id, t.natural_id, t.id_document, t.id_verbatim, t.document_date, t.words,
+            t.cc_advisor_confusing_makes_no_sense, t.cc_advisor_inaccurate_information, t.points_redeem{extra_sel}
+          FROM t LEFT JOIN {src_keyed} s
+            ON t.natural_id=s.natural_id AND t.id_document=s.id_document AND t.id_verbatim=s.id_verbatim
+           AND t.document_date=s.document_date AND t.words=s.words AND t.rn=s.rn""")
+        n = spark.table(f"{out}.{out_sid}").count()
+        print(f"  {out_sid}: {n:,} rows")
+
+    # ai_classify / ai_query result tables are already scoped to the day / window.
+    backfill(ai_classify, "voc_classification_ai_classify_tags_full_day_sid", "ai_labels")
+    backfill(ai_query,    "voc_classification_ai_query_sql_tags_sid",         "ai_categories")
+    # rule_tags_v2 spans the full corpus -> restrict to the validation day.
+    backfill(rule,        "voc_classification_rule_tags_20260611_sid",        None,
+             day_filter=f"to_date(document_date)='{day}'")
+    spark.sql(f"DROP TABLE IF EXISTS {src_keyed}")
 
 # COMMAND ----------
 # MAGIC %md

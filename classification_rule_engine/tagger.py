@@ -30,32 +30,43 @@ ATTR_FIELDS = [
 ]
 
 
-def find_category_model():
-    """Locate shared/category_model.json regardless of folder layout.
+def find_category_model(filename=None):
+    """Locate a category-model JSON regardless of folder layout.
 
-    Files live in a track folder (classification_rule_engine/ or classification_ai/) while category_model.json
-    lives in shared/. On Databricks the bundle co-locates modules + category_model.json.
-    Search order covers both the local repo layout and a flat cluster upload.
+    `filename` may be:
+      * None / ""  -> the default 'category_model.json' (v1);
+      * a basename -> resolved against the known layout dirs, so a job can pass
+                      'category_model_v2.json' and have executors find the copy
+                      the bundle synced into shared/ (the driver's absolute path
+                      won't exist on an executor, so we fall back to the basename);
+      * an existing path (absolute or relative) -> used as-is.
+
+    Files live in a track folder (classification_rule_engine/ or classification_ai/)
+    while the model lives in shared/. On Databricks the bundle co-locates modules +
+    shared/. Search order covers both the local repo layout and a flat cluster upload.
     """
+    filename = (filename or "").strip()
+    if filename and os.path.exists(filename):
+        return filename                                          # explicit, present path
+    base = os.path.basename(filename) if filename else "category_model.json"
     here = os.path.dirname(os.path.abspath(__file__))
     repo = os.path.dirname(here)
     candidates = [
-        os.path.join(here, "category_model.json"),               # flat / co-located (cluster)
-        os.path.join(repo, "shared", "category_model.json"),     # repo layout, sibling folder
-        os.path.join(here, "shared", "category_model.json"),     # shared under cwd
-        os.path.join(os.getcwd(), "category_model.json"),
-        os.path.join(os.getcwd(), "shared", "category_model.json"),
+        os.path.join(here, base),                                # flat / co-located (cluster)
+        os.path.join(repo, "shared", base),                      # repo layout, sibling folder
+        os.path.join(here, "shared", base),                      # shared under cwd
+        os.path.join(os.getcwd(), base),
+        os.path.join(os.getcwd(), "shared", base),
     ]
     for c in candidates:
         if os.path.exists(c):
             return c
     raise FileNotFoundError(
-        "category_model.json not found; looked in: %s" % ", ".join(candidates))
+        "%s not found; looked in: %s" % (base, ", ".join(candidates)))
 
 
 def load_rules(path=None):
-    if path is None:
-        path = find_category_model()
+    path = find_category_model(path)
     with open(path) as f:
         return json.load(f)
 

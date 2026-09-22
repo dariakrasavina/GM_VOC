@@ -43,6 +43,10 @@ DEFAULTS = {
     "date_end": "2026-06-30",
     # Optional row cap for quick test runs; 0 = full corpus (production default).
     "sample_limit": "0",
+    # Rule set to tag with. Empty = the default shared/category_model.json (v1).
+    # Set to another basename synced with the bundle (e.g. category_model_v2.json)
+    # to run/rerun this job against a different rule set.
+    "category_model": "",
 }
 
 JOIN_KEY = "natural_id"
@@ -136,11 +140,13 @@ def load_and_join(spark, params):
     return sent.join(meta, on=JOIN_KEY, how="left")
 
 
-def make_tag_udf():
+def make_tag_udf(rules_path=None):
     """Vectorized pandas_udf that tags a partition of sentences.
 
     Returns a JSON string per row: {"in_scope": bool, "topics": {id: [terms]}}.
     The heavy objects (compiled rules) are built once per executor process.
+    `rules_path` (the category_model param) is captured so executors load the
+    same rule set the driver did.
     """
     import pandas as pd
     from pyspark.sql.functions import pandas_udf
@@ -152,7 +158,7 @@ def make_tag_udf():
     def _tagger():
         if "t" not in _state:
             from tagger import build_tagger, load_rules
-            _state["t"] = build_tagger(load_rules())
+            _state["t"] = build_tagger(load_rules(rules_path))
         return _state["t"]
 
     attr_cols = SENT_ATTRS + META_ATTRS
@@ -190,13 +196,14 @@ def run():
     print("Params: %s" % params)
     tags_table = params["tags_table"]
     freq_table = params["freq_table"]
+    rules_path = params.get("category_model") or None
 
-    tagger = build_tagger(load_rules())
+    tagger = build_tagger(load_rules(rules_path))
     topic_ids = tagger.topic_ids()
     topic_meta = tagger.topic_meta()
 
     df = load_and_join(spark, params)
-    tag_udf, attr_cols = make_tag_udf()
+    tag_udf, attr_cols = make_tag_udf(rules_path)
 
     # Build the struct payload: words + each attribute column (aliased so the
     # UDF's DataFrame has stable column names). Missing metadata cols -> null.

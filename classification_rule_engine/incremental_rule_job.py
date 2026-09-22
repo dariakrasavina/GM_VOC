@@ -63,6 +63,11 @@ DEFAULTS = {
     # Set to "1" to (re)seed the snapshot from current rules and exit (use after a
     # full-job run so the snapshot matches the tags the full job just wrote).
     "seed_only": "0",
+    # Rule set to diff + re-tag with. Empty = the default shared/category_model.json
+    # (v1). Set to another basename synced with the bundle (e.g. category_model_v2.json)
+    # to re-tag against a different rule set. MUST match the model the baseline
+    # tags_table was built with, or the diff is meaningless.
+    "category_model": "",
 }
 
 JOIN_KEY = "natural_id"
@@ -279,7 +284,7 @@ def read_snapshot(spark, table):
 # ---------------------------------------------------------------------------
 # Recompute UDF (affected categories only) — same engine as the full job.
 # ---------------------------------------------------------------------------
-def _make_tag_udf():
+def _make_tag_udf(rules_path=None):
     import pandas as pd
     from pyspark.sql.functions import pandas_udf
     from pyspark.sql.types import StringType
@@ -289,7 +294,7 @@ def _make_tag_udf():
     def _tagger():
         if "t" not in _state:
             from tagger import build_tagger, load_rules
-            _state["t"] = build_tagger(load_rules())
+            _state["t"] = build_tagger(load_rules(rules_path))
         return _state["t"]
 
     attr_cols = SENT_ATTRS + META_ATTRS
@@ -322,7 +327,8 @@ def run():
     print("Params: %s" % params)
     tags_table = params["tags_table"]
     snap_table = params["snapshot_table"]
-    new_rules = load_rules()
+    rules_path = params.get("category_model") or None
+    new_rules = load_rules(rules_path)
 
     # Seed-and-exit if there is no snapshot yet (or explicitly requested).
     if params.get("seed_only") == "1" or not spark.catalog.tableExists(snap_table):
@@ -391,7 +397,7 @@ def run():
     cand = candidates.select(JOIN_KEY, TEXT_FIELD, *[c for c in SENT_ATTRS if c in existing_cols])
     cand = cand.join(meta, on=JOIN_KEY, how="left")
 
-    tag_udf, attr_cols = _make_tag_udf()
+    tag_udf, attr_cols = _make_tag_udf(rules_path)
     payload = [F.col(TEXT_FIELD).alias("words")]
     for c in attr_cols:
         payload.append((F.col(c) if c in cand.columns else F.lit(None).cast("string")).alias(c))

@@ -77,16 +77,16 @@ from ai_common import load_categories
 
 TEXT_FIELD = base.TEXT_FIELD
 
-_TRIGGER_COLS = None
+_TRIGGER_COLS = {}
 
 
-def _trigger_cols():
-    """Cached base._trigger_cols() — it reads category_model.json and runs an
-    O(n^2) descendant scan, so compute the roll-up column list once per process."""
-    global _TRIGGER_COLS
-    if _TRIGGER_COLS is None:
-        _TRIGGER_COLS = base._trigger_cols()
-    return _TRIGGER_COLS
+def _trigger_cols(rules_path=None):
+    """Cached base._trigger_cols() — it reads the category model and runs an
+    O(n^2) descendant scan, so compute the roll-up column list once per model
+    file per process (keyed by rules_path so v1 and v2 don't collide)."""
+    if rules_path not in _TRIGGER_COLS:
+        _TRIGGER_COLS[rules_path] = base._trigger_cols(rules_path)
+    return _TRIGGER_COLS[rules_path]
 
 CATALOG = "daria_krasavina"
 SCHEMA = "gm_voc"
@@ -118,6 +118,11 @@ DEFAULTS = {
     # Confidence gate — MUST match the full run's setting so tags stay consistent.
     "enable_confidence": "true",
     "conf_threshold": "0.0",
+    # Category model to diff + re-score against. Empty = the default
+    # shared/category_model.json (v1). Set to another basename synced with the
+    # bundle (e.g. category_model_v2.json) to re-tag against a different label set.
+    # MUST match the model the baseline was built with, or the diff is meaningless.
+    "category_model": "",
     # REQUIRED for run(): the SQL warehouse that executes the batch SQL.
     "warehouse_id": "",
 }
@@ -183,6 +188,7 @@ def plan(old_desc, new_desc, explicit_changed):
 # ---------------------------------------------------------------------------
 def build_statements(params, pl, target_labels, name_to_id):
     """Return the ordered SQL steps + bound-param payloads for a plan `pl`."""
+    rules_path = params.get("category_model") or None
     tags = params["ai_tags_table"]
     cand = tags + "__inc_cand"
     merged = tags + "__inc_merge"
@@ -213,7 +219,7 @@ def build_statements(params, pl, target_labels, name_to_id):
     touched_arr = base._sql_array(pl["touched"])       # drop old entries for these
     # Recompute every category column (leaf + parents) from the rebuilt label set.
     col_exprs = []
-    for cid, names in _trigger_cols():
+    for cid, names in _trigger_cols(rules_path):
         if names:
             col_exprs.append("CASE WHEN arrays_overlap(lbls, %s) THEN 1 ELSE 0 END AS `%s`"
                              % (base._sql_array(names), cid))
@@ -239,7 +245,7 @@ def build_statements(params, pl, target_labels, name_to_id):
 
     # (3) MERGE updated ai_labels + recomputed columns back, keyed by sentence text.
     set_parts = ["t.ai_labels = s.ai_labels"]
-    current_ids = [cid for cid, _ in _trigger_cols()]
+    current_ids = [cid for cid, _ in _trigger_cols(rules_path)]
     for cid in current_ids:
         set_parts.append("t.`%s` = s.`%s`" % (cid, cid))
     # Removed categories are no longer recomputed above -> zero their column here.
@@ -323,7 +329,8 @@ def run():
         return r
 
     # Current target descriptions = the ai_classify "rules".
-    target_labels, name_to_id, _, _, _ = load_categories()
+    rules_path = params.get("category_model") or None
+    target_labels, name_to_id, _, _, _ = load_categories(rules_path)
     new_desc = {n: d for n, d in target_labels.items()}
 
     def table_exists(t):
@@ -398,12 +405,13 @@ def run():
 
 def _removal_only_merge_sql(params, pl, name_to_id):
     """Merge-table build when the only change is REMOVED labels (no re-score)."""
+    rules_path = params.get("category_model") or None
     tags = params["ai_tags_table"]
     cand = tags + "__inc_cand"
     merged = tags + "__inc_merge"
     touched_arr = base._sql_array(pl["removed"])
     col_exprs = []
-    for cid, names in _trigger_cols():
+    for cid, names in _trigger_cols(rules_path):
         if names:
             col_exprs.append("CASE WHEN arrays_overlap(lbls, %s) THEN 1 ELSE 0 END AS `%s`"
                              % (base._sql_array(names), cid))

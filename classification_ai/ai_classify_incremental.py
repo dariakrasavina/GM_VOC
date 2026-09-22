@@ -82,10 +82,15 @@ SCHEMA = "gm_voc"
 _NS = "%s.%s" % (CATALOG, SCHEMA)
 
 DEFAULTS = {
-    # The existing ai_classify output table to update in place. It already holds
-    # every in-scope row (tagged or not) with ai_labels + one 0/1 column per
+    # The existing ai_classify output table (the FULL-run baseline). It already
+    # holds every in-scope row (tagged or not) with ai_labels + one 0/1 column per
     # category, so candidates are drawn from it (no source scan needed).
     "ai_tags_table": _NS + ".voc_classification_ai_classify_tags",
+    # Where to write the incremental result. Empty = update ai_tags_table IN PLACE
+    # (default). If set (e.g. <ai_tags_table>_incremental), the job first COPIES the
+    # baseline there and applies the change to the copy, leaving the baseline (and
+    # its snapshot) untouched — so you can diff baseline vs. post-change.
+    "output_table": "",
     # Descriptions-as-of-last-run. Default: derived from ai_tags_table.
     "snapshot_table": "",
     # Set "1" to (re)seed the snapshot from current descriptions and exit (use
@@ -345,12 +350,20 @@ def run():
               "(%s). Use mode=full or mode=terms to catch newly-qualifying "
               "sentences." % ", ".join(pl["added"]))
 
-    st = build_statements(params, pl, target_labels, name_to_id)
-    print("Re-scoring labels: %s | mode=%s" % (pl["rescore"], params.get("mode")))
+    # Target: in place (baseline) or a separate _incremental copy.
+    tags = params["ai_tags_table"]
+    out = (params.get("output_table") or "").strip() or tags
+    if out != tags:
+        execute("CREATE OR REPLACE TABLE %s AS SELECT * FROM %s" % (out, tags), label="copy")
+        print("  copied baseline %s -> %s (baseline untouched)" % (tags, out))
+    params_out = dict(params)
+    params_out["ai_tags_table"] = out          # all writes/temps target `out`
+
+    st = build_statements(params_out, pl, target_labels, name_to_id)
+    print("Re-scoring labels: %s | mode=%s | target=%s" % (pl["rescore"], params.get("mode"), out))
 
     execute(st["cand"], label="candidates")
-    n_cand = execute("SELECT count(*) FROM %s" % (params["ai_tags_table"] + "__inc_cand"),
-                     fetch=True)
+    n_cand = execute("SELECT count(*) FROM %s" % (out + "__inc_cand"), fetch=True)
     print("  distinct candidate sentences: %s" % (n_cand[0][0] if n_cand else "?"))
     if pl["rescore"]:
         execute(st["merge"],
@@ -360,13 +373,16 @@ def run():
     else:
         # Only removals: rebuild label set with no re-score (empty ai_classify input
         # would error), so build the merge table directly from candidates.
-        execute(_removal_only_merge_sql(params, pl, name_to_id), label="remove")
+        execute(_removal_only_merge_sql(params_out, pl, name_to_id), label="remove")
     execute(st["merge_into"], label="merge")
     for d in st["drops"]:
         execute(d, label="cleanup")
-    write_snapshot()
-    print("Updated %s in place (incremental) and refreshed snapshot %s."
-          % (params["ai_tags_table"], snap))
+    if out == tags:
+        write_snapshot()
+        print("Updated %s in place (incremental) and refreshed snapshot %s." % (tags, snap))
+    else:
+        print("Wrote incremental result to %s; baseline %s and snapshot %s unchanged "
+              "(diff the two to see what the change did)." % (out, tags, snap))
 
 
 def _removal_only_merge_sql(params, pl, name_to_id):

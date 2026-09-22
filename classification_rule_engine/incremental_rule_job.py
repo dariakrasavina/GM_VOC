@@ -53,6 +53,11 @@ DEFAULTS = {
     "metadata_table": _NS + ".qualtrics_audio_transcripts_metadata_sample_data",
     "tags_table": _NS + ".voc_classification_rule_tags",
     "freq_table": _NS + ".voc_classification_rule_frequencies",
+    # Where to write the incremental result. Empty = update tags_table IN PLACE
+    # (default). If set (e.g. <tags_table>_incremental), the job first COPIES the
+    # baseline there and applies the change to the copy, leaving the baseline (and
+    # its snapshot) untouched — so you can diff baseline vs. post-change.
+    "output_table": "",
     # Where the rules-as-of-last-run are recorded. Default: derived from tags_table.
     "snapshot_table": "",
     # Set to "1" to (re)seed the snapshot from current rules and exit (use after a
@@ -341,7 +346,16 @@ def run():
 
     changed_removed = plan["changed"] + plan["removed"]
     affected = plan["affected_columns"]
-    tags = spark.table(tags_table)
+
+    # Target: update the baseline IN PLACE, or COPY it to a separate _incremental
+    # table and apply the change there (baseline + snapshot left untouched).
+    target = (params.get("output_table") or "").strip() or tags_table
+    if target != tags_table:
+        spark.sql("CREATE OR REPLACE TABLE %s AS SELECT * FROM %s" % (target, tags_table))
+        print("Copied baseline %s -> %s; applying incremental to the copy."
+              % (tags_table, target))
+
+    tags = spark.table(target)
     existing_cols = set(tags.columns)
 
     # ---- CANDIDATE ROWS -----------------------------------------------------
@@ -394,7 +408,7 @@ def run():
     recomputed = cand.select(*sel)
 
     # Materialize the recompute once (serverless-safe: no persist), then MERGE.
-    tmp = tags_table + "__inc_tmp"
+    tmp = target + "__inc_tmp"
     (recomputed.write.mode("overwrite").format("delta")
         .option("overwriteSchema", "true").saveAsTable(tmp))
 
@@ -402,9 +416,9 @@ def run():
     for cid in plan["added"]:
         for col, typ in ((cid, "INT"), (cid + "__terms", "STRING")):
             if col not in existing_cols:
-                spark.sql("ALTER TABLE %s ADD COLUMNS (`%s` %s)" % (tags_table, col, typ))
+                spark.sql("ALTER TABLE %s ADD COLUMNS (`%s` %s)" % (target, col, typ))
 
-    # ---- MERGE recomputed values in place -----------------------------------
+    # ---- MERGE recomputed values into the target ----------------------------
     set_parts = []
     for cid in recomputed_cols:
         set_parts.append("t.`%s` = s.`%s`" % (cid, cid))
@@ -417,7 +431,7 @@ def run():
                 set_parts.append("t.`%s` = ''" % (cid + "__terms"))
     merge_sql = ("MERGE INTO %s t USING %s s ON t.`%s` = s.`%s` "
                  "WHEN MATCHED THEN UPDATE SET %s"
-                 % (tags_table, tmp, JOIN_KEY, JOIN_KEY, ", ".join(set_parts)))
+                 % (target, tmp, JOIN_KEY, JOIN_KEY, ", ".join(set_parts)))
     t0 = time.time()
     spark.sql(merge_sql)
     print("MERGE done in %.1fs (updated affected columns on candidate rows)."
@@ -425,10 +439,18 @@ def run():
     spark.sql("DROP TABLE IF EXISTS %s" % tmp)
 
     # ---- Refresh frequency table + snapshot ---------------------------------
-    _refresh_frequencies(spark, params, new_rules)
-    write_snapshot(spark, snap_table, new_rules)
-    print("Updated %s in place; refreshed %s and snapshot %s."
-          % (tags_table, params["freq_table"], snap_table))
+    # In place: refresh the freq table and advance the snapshot. Separate output:
+    # leave the baseline's freq + snapshot untouched (repeatable diffs); the
+    # _incremental table is a comparison artifact.
+    if target == tags_table:
+        _refresh_frequencies(spark, params, new_rules)
+        write_snapshot(spark, snap_table, new_rules)
+        print("Updated %s in place; refreshed %s and snapshot %s."
+              % (tags_table, params["freq_table"], snap_table))
+    else:
+        print("Wrote incremental result to %s; baseline %s, its freq %s and snapshot "
+              "%s unchanged (diff the two to see what the change did)."
+              % (target, tags_table, params["freq_table"], snap_table))
 
 
 def _refresh_frequencies(spark, params, rules):

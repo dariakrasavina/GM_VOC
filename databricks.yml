@@ -212,6 +212,9 @@ resources:
               tags_table: ${var.target_catalog}.${var.target_schema}.${var.rule_tags_table_name}
               freq_table: ${var.target_catalog}.${var.target_schema}.${var.rule_freq_table_name}
               snapshot_table: ${var.target_catalog}.${var.target_schema}.${var.rule_tags_table_name}__rules_snapshot
+              # Write the re-tagged result to a separate _incremental table (baseline
+              # preserved for before/after comparison). Set to "" to update in place.
+              output_table: ${var.target_catalog}.${var.target_schema}.${var.rule_tags_table_name}_incremental
               # Set to "1" for a run that only (re)seeds the snapshot, then exits.
               seed_only: "0"
       queue:
@@ -298,6 +301,9 @@ resources:
             base_parameters:
               ai_tags_table: ${var.target_catalog}.${var.target_schema}.${var.ai_classify_tags_table_name}
               snapshot_table: ${var.target_catalog}.${var.target_schema}.${var.ai_classify_tags_table_name}__desc_snapshot
+              # Write the re-tagged result to a separate _incremental table (baseline
+              # preserved for before/after comparison). Set to "" to update in place.
+              output_table: ${var.target_catalog}.${var.target_schema}.${var.ai_classify_tags_table_name}_incremental
               warehouse_id: ${var.sql_warehouse_id}
               # Candidate strategy: full | narrow | terms.
               mode: "full"

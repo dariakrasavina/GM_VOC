@@ -110,7 +110,7 @@
       "level": 3,
       "description": "DEFINITION: Mentions related to GM credit cards\n\nINCLUDE: GM, GMC, Buick, Chevy, Cadillac, marcus, and BuyPower cards; rewards tiers (silver, gold, platinum)",
       "ai_description": "Assign 'Loyalty - Card' when the customer refers to a GM-branded credit card - the GM Card, GMC/Buick/Chevy/Cadillac Card, BuyPower Card, or the Marcus/Goldman Sachs account that backs it (applying for it, its rewards/earnings, balance, payments, or the card account). Do NOT assign for a generic gift card, a non-GM credit card, or when 'card' means an unrelated ID/key card.",
-      "comparison_target": false,
+      "comparison_target": true,
       "has_rules": true,
       "lanes": {
         "keywords": "_mtoken:CARD, _mtoken:CARDMEMBER, _mtoken:\"CREDIT CARD\", _mtoken:CREDIT, \"GM Rewards Card\", \"GM Reward Card\", \"GM Card\", \"GM Extended Family Card\", \"BuyPower Business Card\", \"GM Business Card\", \"Business Card\", \"Chevy Card\", \"Chevrolet Card\", \"Buick Card\", \"GMC Card\", \"Cadillac Card\", _mtoken:MARCUS, _mtoken:\"MARCUS GOLDMAN\", _mtoken:MARCUS.COM, \"Tier\", \"Tiers\", \"Silver tier\", \"Silver member\", \"Gold tier\", \"Gold member\", \"Platinum tier\", \"Platinum member\"",

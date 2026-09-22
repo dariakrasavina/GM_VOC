@@ -139,10 +139,11 @@ def build_statements(params):
     # (2) content pre-filter: drop sentences shorter than min_words words.
     min_words = int(params.get("min_words") or 0)
     if min_words > 0:
-        where += " AND size(split(trim(%s), ' ')) >= %d" % (TEXT_FIELD, min_words)
+        # array_remove('') so runs of >1 space don't inflate the token count.
+        where += " AND size(array_remove(split(trim(%s), ' '), '')) >= %d" % (TEXT_FIELD, min_words)
     limit = int(params.get("sample_limit") or 0)
     lim = ("LIMIT %d" % limit) if limit > 0 else ""
-    sample_mode = (params.get("sample_mode") or "frequency").strip().lower()
+    sample_mode = (params.get("sample_mode") or "random").strip().lower()
     ctx_n = int(params.get("context_window") or 0)
 
     ep = params["classify_endpoint"]
@@ -174,7 +175,10 @@ def build_statements(params):
         # is for small quality-eval samples, not full-day scale. sample_mode=random
         # gives a representative sample; frequency doesn't apply per-row.
         byrow_tmp = tags + "__byrow_tmp"
-        win = "PARTITION BY id_verbatim ORDER BY document_date"
+        # ORDER BY sentence_id: document_date is document-level (constant within a
+        # call), so it can't order sentences; sentence_id gives the real neighbor
+        # sequence for the lag/lead context window.
+        win = "PARTITION BY id_verbatim ORDER BY sentence_id"
         parts = ["lag(%s, %d) OVER (%s)" % (TEXT_FIELD, i, win) for i in range(ctx_n, 0, -1)]
         parts += ["'>>>'", TEXT_FIELD, "'<<<'"]
         parts += ["lead(%s, %d) OVER (%s)" % (TEXT_FIELD, i, win) for i in range(1, ctx_n + 1)]

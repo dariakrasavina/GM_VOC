@@ -234,7 +234,8 @@ def build_statements(params):
                   % (int(hs), int(he)))
     min_words = int(params.get("min_words") or 0)
     if min_words > 0:
-        where += " AND size(split(trim(%s), ' ')) >= %d" % (TEXT_FIELD, min_words)
+        # array_remove('') so runs of >1 space don't inflate the token count.
+        where += " AND size(array_remove(split(trim(%s), ' '), '')) >= %d" % (TEXT_FIELD, min_words)
     limit = int(params.get("sample_limit") or 0)
     lim = ("LIMIT %d" % limit) if limit > 0 else ""
     sample_mode = (params.get("sample_mode") or "random").strip().lower()

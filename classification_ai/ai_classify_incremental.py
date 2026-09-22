@@ -77,6 +77,17 @@ from ai_common import load_categories
 
 TEXT_FIELD = base.TEXT_FIELD
 
+_TRIGGER_COLS = None
+
+
+def _trigger_cols():
+    """Cached base._trigger_cols() — it reads category_model.json and runs an
+    O(n^2) descendant scan, so compute the roll-up column list once per process."""
+    global _TRIGGER_COLS
+    if _TRIGGER_COLS is None:
+        _TRIGGER_COLS = base._trigger_cols()
+    return _TRIGGER_COLS
+
 CATALOG = "daria_krasavina"
 SCHEMA = "gm_voc"
 _NS = "%s.%s" % (CATALOG, SCHEMA)
@@ -202,7 +213,7 @@ def build_statements(params, pl, target_labels, name_to_id):
     touched_arr = base._sql_array(pl["touched"])       # drop old entries for these
     # Recompute every category column (leaf + parents) from the rebuilt label set.
     col_exprs = []
-    for cid, names in base._trigger_cols():
+    for cid, names in _trigger_cols():
         if names:
             col_exprs.append("CASE WHEN arrays_overlap(lbls, %s) THEN 1 ELSE 0 END AS `%s`"
                              % (base._sql_array(names), cid))
@@ -228,7 +239,7 @@ def build_statements(params, pl, target_labels, name_to_id):
 
     # (3) MERGE updated ai_labels + recomputed columns back, keyed by sentence text.
     set_parts = ["t.ai_labels = s.ai_labels"]
-    current_ids = [cid for cid, _ in base._trigger_cols()]
+    current_ids = [cid for cid, _ in _trigger_cols()]
     for cid in current_ids:
         set_parts.append("t.`%s` = s.`%s`" % (cid, cid))
     # Removed categories are no longer recomputed above -> zero their column here.
@@ -392,7 +403,7 @@ def _removal_only_merge_sql(params, pl, name_to_id):
     merged = tags + "__inc_merge"
     touched_arr = base._sql_array(pl["removed"])
     col_exprs = []
-    for cid, names in base._trigger_cols():
+    for cid, names in _trigger_cols():
         if names:
             col_exprs.append("CASE WHEN arrays_overlap(lbls, %s) THEN 1 ELSE 0 END AS `%s`"
                              % (base._sql_array(names), cid))

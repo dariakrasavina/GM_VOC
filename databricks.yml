@@ -276,6 +276,45 @@ resources:
         enabled: true
 
     # ----------------------------------------------------------------------
+    # Classification (ai_classify) — INCREMENTAL re-tag after a label-DESCRIPTION
+    # change (the semantic analogue of the rule-engine incremental job). Diffs the
+    # target descriptions in category_model.json vs a snapshot and re-scores ONLY
+    # the changed label(s) over a bounded candidate set, MERGEing in place — instead
+    # of a full re-run over every label. First run seeds the snapshot (run the full
+    # ai_classify job first). Writes to the SAME table as the full job.
+    #   mode = full   (default; correct for any change — re-scores changed labels
+    #                  over all distinct in-scope sentences)
+    #        | narrow (cheap; restrictive changes only — currently-tagged rows)
+    #        | terms  (cheap broadening; set candidate_terms as a keyword proxy)
+    # Requires sql_warehouse_id. conf_threshold/enable_confidence MUST match the
+    # full ai_classify run (kept in sync here).
+    # ----------------------------------------------------------------------
+    voc_classification_ai_classify_incremental_job:
+      name: "[${bundle.target}] GM VOC Classification (ai_classify, incremental)"
+      tasks:
+        - task_key: classify_ai_classify_incremental
+          notebook_task:
+            notebook_path: ./classification_ai/run_ai_classify_incremental_notebook.py
+            base_parameters:
+              ai_tags_table: ${var.target_catalog}.${var.target_schema}.${var.ai_classify_tags_table_name}
+              snapshot_table: ${var.target_catalog}.${var.target_schema}.${var.ai_classify_tags_table_name}__desc_snapshot
+              warehouse_id: ${var.sql_warehouse_id}
+              # Candidate strategy: full | narrow | terms.
+              mode: "full"
+              # Optional: comma-separated target category NAMES to force re-scoring
+              # (overrides the snapshot diff). Empty = use the diff.
+              changed_labels: ""
+              # For mode=terms: comma-separated keyword proxy for GAIN candidates.
+              candidate_terms: ""
+              # Set "1" to only (re)seed the description snapshot, then exit.
+              seed_only: "0"
+              # Keep matched to the full ai_classify run's confidence settings.
+              enable_confidence: "true"
+              conf_threshold: "0.0"
+      queue:
+        enabled: true
+
+    # ----------------------------------------------------------------------
     # Topic modeling — exploratory theme discovery (embeddings + clustering).
     # Standalone job; independent of the ai_classify track.
     # AI functions require serverless + DBR 18.2+.

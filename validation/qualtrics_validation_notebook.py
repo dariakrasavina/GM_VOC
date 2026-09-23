@@ -108,20 +108,24 @@ else:
       FROM {src} src
       WHERE {DAY} AND {SCOPE} AND lower(src.language)='english'""")
 
-    def backfill(method_tags, out_sid, extra_col, day_filter=""):
-        # Drive FROM the result table so the _sid row count == the result-table row count exactly.
-        extra_sel_t = f", {extra_col}" if extra_col else ""
-        extra_sel   = f", t.{extra_col}" if extra_col else ""
+    def backfill(method_tags, out_sid, day_filter=""):
+        # Drive FROM the result table so the _sid row count == the result-table row count
+        # exactly, and carry ALL of the method table's columns through (t.* EXCEPT rn) —
+        # so the _sid table is a complete copy + sentence_id. (Previously only 3 leaf
+        # columns were kept, which dropped the loyalty roll-up columns loyalty /
+        # loyalty_rewards / loyalty_rewards_points and every other category column.)
+        # NOTE on the rn pairing: ORDER BY words is a within-key tie-break only. When the
+        # composite key collides (same verbatim + words spanning >1 sentence_id) the
+        # pairing to a specific sentence_id is arbitrary, but every colliding row shares
+        # the same text + call metadata, so its tags are identical — the assigned tag
+        # values are correct regardless of which sentence_id in the group it lands on.
         where = f"WHERE {day_filter}" if day_filter else ""
         spark.sql(f"""
           CREATE OR REPLACE TABLE {out}.{out_sid} AS
           WITH t AS (
-            SELECT natural_id, id_document, id_verbatim, document_date, words,
-              cc_advisor_confusing_makes_no_sense, cc_advisor_inaccurate_information, points_redeem{extra_sel_t},
-              row_number() OVER (PARTITION BY {KEY} ORDER BY words) AS rn
+            SELECT *, row_number() OVER (PARTITION BY {KEY} ORDER BY words) AS rn
             FROM {method_tags} {where})
-          SELECT s.sentence_id, t.natural_id, t.id_document, t.id_verbatim, t.document_date, t.words,
-            t.cc_advisor_confusing_makes_no_sense, t.cc_advisor_inaccurate_information, t.points_redeem{extra_sel}
+          SELECT s.sentence_id, t.* EXCEPT (rn)
           FROM t LEFT JOIN {src_keyed} s
             ON t.natural_id=s.natural_id AND t.id_document=s.id_document AND t.id_verbatim=s.id_verbatim
            AND t.document_date=s.document_date AND t.words=s.words AND t.rn=s.rn""")
@@ -130,10 +134,10 @@ else:
 
     try:
         # ai_classify / ai_query result tables are already scoped to the day / window.
-        backfill(ai_classify, "voc_classification_ai_classify_tags_full_day_sid", "ai_labels")
-        backfill(ai_query,    "voc_classification_ai_query_sql_tags_sid",         "ai_categories")
+        backfill(ai_classify, "voc_classification_ai_classify_tags_full_day_sid")
+        backfill(ai_query,    "voc_classification_ai_query_sql_tags_sid")
         # rule_tags_v2 spans the full corpus -> restrict to the validation day.
-        backfill(rule,        "voc_classification_rule_tags_20260611_sid",        None,
+        backfill(rule,        "voc_classification_rule_tags_20260611_sid",
                  day_filter=f"to_date(document_date)='{day}'")
     finally:
         # Always clean up the temp table, even if a backfill fails partway.

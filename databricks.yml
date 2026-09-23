@@ -405,7 +405,11 @@ resources:
               out_schema: ${var.target_catalog}.${var.target_schema}
               ai_classify_tags: ${var.target_catalog}.${var.target_schema}.voc_classification_ai_classify_tags_full_day
               ai_query_tags: ${var.target_catalog}.${var.target_schema}.voc_classification_ai_query_sql_tags
-              rule_tags: ${var.target_catalog}.${var.target_schema}.voc_classification_rule_tags_v2
+              # The established rule-engine baseline validated against Qualtrics. NOTE:
+              # this was renamed from voc_classification_rule_tags_v2 -> voc_classification_rule_tags;
+              # the name voc_classification_rule_tags_v2 now holds the NEW client rules
+              # (category_model_v2.json), which is a SEPARATE validation, not this one.
+              rule_tags: ${var.target_catalog}.${var.target_schema}.voc_classification_rule_tags
               classify_date: ${var.ai_classify_date}
               hour_start: "9"
               hour_end: "12"

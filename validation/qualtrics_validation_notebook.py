@@ -223,7 +223,7 @@ compare_and_write("voc_classification_rule_tags_20260611_sid",        "rule_engi
 # Short, readable per-leaf name for the side-by-side columns.
 SHORT = {"cc_advisor_confusing_makes_no_sense": "confusing",
          "cc_advisor_inaccurate_information":   "inaccurate",
-         "points_redeem":                       "points",
+         "points_redeem":                       "points_redeem",
          "loyalty_rewards_points":              "loyalty_points"}
 
 # Categories shown side-by-side across the methods but NOT compared to Qualtrics:
@@ -292,11 +292,11 @@ sentence_by_sentence()
 display(spark.sql(f"""
   SELECT document_date_ts, substr(words,1,80) sentence,
     confusing_qualtrics, confusing_rule, confusing_ai_classify, confusing_ai_query,
-    points_qualtrics, points_rule, points_ai_classify, points_ai_query
+    points_redeem_qualtrics, points_redeem_rule, points_redeem_ai_classify, points_redeem_ai_query
   FROM {out}.validation_sentence_by_sentence
   WHERE ai_query_ran=1
     AND (confusing_qualtrics+confusing_rule+confusing_ai_classify+confusing_ai_query IN (1,2,3)
-      OR points_qualtrics+points_rule+points_ai_classify+points_ai_query IN (1,2,3))
+      OR points_redeem_qualtrics+points_redeem_rule+points_redeem_ai_classify+points_redeem_ai_query IN (1,2,3))
   LIMIT 50"""))
 
 # COMMAND ----------

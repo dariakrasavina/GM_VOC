@@ -16,17 +16,20 @@ category-loading + prompt code lives in `ai_common.py`.
 
 Both AI tracks classify against the **same** `shared/category_model.json` that the rule
 engine uses — but the AI reads a **different part of it**. `ai_classify` (via
-`build_labels_json` → `load_categories`) pulls only **`{name: description}`** — the
-plain-English business definition. **It never sees the keyword lanes.** The rule engine
-does the opposite: it runs the **`lanes`** (keywords / and / and2 / not) and treats the
-`description` as a comment.
+`build_labels_json` → `load_categories`) pulls each target's **`ai_description`** — its
+plain-English classifier definition (falling back to the customer-authored `description`
+if a node has none). **It never sees the keyword lanes.** The rule engine does the
+opposite: it runs the **`lanes`** (keywords / and / and2 / not) and treats the
+descriptions as comments.
 
 They read different parts of `category_model.json`:
 
 | Field in each node | Rule engine uses it? | `ai_classify` uses it? |
 |---|---|---|
 | `lanes` (keywords / and / and2 / not) | ✅ **this is the rule** | ❌ never sees it |
-| `description` (business definition) | ❌ just documentation | ✅ **this is what it sends the model** |
+| `ai_description` (classifier definition) | ❌ ignored | ✅ **this is what it sends the model** |
+| `description` (customer's note) | ❌ just documentation | ✅ only as a fallback if `ai_description` is absent |
+| `comparison_target` | flags `is_target` (which categories the comparison scores) | ✅ **only `true` nodes are sent as labels** |
 | `name` | for output | ✅ the label |
 | `path` (hierarchy) | ✅ roll-up | ✅ roll-up |
 
@@ -40,9 +43,8 @@ Concrete contrast, the "Confusing" category:
 
 - **Rule engine** sees the lanes: `confused, confusing, "makes no sense", bewilder*, …
   NOT ("no confusion")` → fires only on those literal terms.
-- **`ai_classify`** sees only the description: *"Customer mentions of being confused or
-  feeling like something does not make sense; EXCLUDE dealer and Roadside."* → the model
-  judges meaning.
+- **`ai_classify`** sees only the `ai_description` (a full "assign ONLY when… do NOT
+  assign when…" definition) → the model judges meaning.
 
 | Sentence | Rule engine | `ai_classify` |
 |---|---|---|
@@ -51,12 +53,61 @@ Concrete contrast, the "Confusing" category:
 
 **Bottom line: same taxonomy, two engines.** Rules = deterministic keyword matching
 (consistent, brittle to new phrasing); AI = semantic matching (handles paraphrase, needs
-validation, costs per call). Because `ai_classify` runs on the *definition* (plus the
-global `instructions` in `ai_classify.py`), **that wording is where all of its quality
-lives** — loosening or tightening it moves results dramatically. For the rule engine the
-description is inert; the lanes do the work. See
+validation, costs per call). Because `ai_classify` runs on the label's **`ai_description`**
+(plus the global, category-agnostic `INSTRUCTIONS` preamble in `ai_classify.py`), **that
+wording is where all of its quality lives** — loosening or tightening it moves results
+dramatically. For the rule engine the descriptions are inert; the lanes do the work. See
 [`../classification_rule_engine/README.md`](../classification_rule_engine/README.md) for
 the matching engine.
+
+---
+
+## Full run vs. incremental re-tag — when to use which
+
+`ai_classify.py` (**full**) re-scores **every** distinct sentence for **every** target
+label and rebuilds the table from scratch, refreshing the `ai_result_json` audit blob.
+`ai_classify_incremental.py` (**incremental**) diffs the current label **`ai_description`s**
+against a saved snapshot and re-scores **only the changed/added label(s)** over a bounded
+candidate set, MERGEing into an `_incremental` copy (baseline preserved) — far cheaper,
+but it does **not** refresh `ai_result_json`.
+
+**Run the FULL job when:**
+- there is no baseline table / snapshot yet (first run);
+- you **added a new category** — a new label can apply to *any* sentence, so all
+  sentences must be scored (`narrow` can't find gains);
+- you changed something **global**: the `INSTRUCTIONS` preamble, confidence threshold,
+  `min_words`, scope (`classify_date` / `hour_*`), `sample_limit`, or the **model file**
+  (e.g. `category_model.json` → `category_model_v2.json`);
+- you changed **many** labels at once, or you need a **fresh `ai_result_json`** audit blob.
+
+**Run the INCREMENTAL job when** all three hold: a baseline **+ snapshot** exist, you
+edited **one/few** labels' `ai_description`, and you want it applied cheaply:
+
+| Kind of `ai_description` edit | `mode` |
+|---|---|
+| **Tightened** a definition (only removes tags) | `narrow` — re-scores just the currently-tagged rows (cheapest) |
+| **Broadened** a definition (can add tags) | `full` (all distinct) or `terms` (keyword proxy) — `narrow` can't find new gains |
+
+The incremental diff compares against the **snapshot**, so seed it first (or force a
+label with `changed_labels`) or the diff is meaningless.
+
+### ⚠️ Keyword edits do NOT affect `ai_classify`
+`ai_classify` reads `ai_description`, **never the keyword lanes**. So editing a category's
+`lanes` (keywords / and / and2 / not):
+- **moves the rule engine** → run the **rule-engine** incremental
+  (`../classification_rule_engine/`), which diffs the lanes and, for a broadening, finds
+  gain candidates by keyword;
+- is **invisible to `ai_classify`** → its incremental reports "nothing to do", and a full
+  `ai_classify` run returns identical tags.
+
+To change `ai_classify`'s behavior for a category you must edit its **`ai_description`**
+(then `full`/`terms` for a broadening, `narrow` for a tightening).
+
+### Selecting the rule set (`category_model` param)
+Both the full and incremental jobs take a **`category_model`** param: empty = the default
+`category_model.json`; set it to another basename synced with the bundle (e.g.
+`category_model_v2.json`) to run against a different rule set. The full job scores against
+it; the incremental diffs its `ai_description`s against the snapshot.
 
 ---
 
@@ -146,6 +197,18 @@ Uses the purpose-built `ai_classify(text, labels, MAP('version','2.1', ...))`.
   Claude/GPT), so accuracy may differ from the Sonnet `ai_query` path — that's
   what the comparison job is for.
 
+### `ai_classify_incremental.py` — incremental re-tag (semantic diff)
+The cheap analogue of the rule-engine incremental job, for `ai_classify`. Diffs the
+current label **`ai_description`s** against a snapshot (`<tags>__desc_snapshot`) and
+re-scores **only the changed/added label(s)** over a bounded candidate set, then MERGEs
+the rebuilt label set + recomputed 0/1 columns into an `_incremental` copy (baseline
+untouched). See **"Full run vs. incremental"** above for when to use it and which `mode`.
+- `mode` = `full` (all distinct — correct for any change) | `narrow` (currently-tagged
+  rows only — tightening/removals) | `terms` (broadening with a `candidate_terms` keyword
+  proxy). `changed_labels` forces specific labels; `seed_only=1` (re)seeds the snapshot.
+- Does **not** refresh `ai_result_json` (only the load-bearing `ai_labels` + columns).
+  Confidence settings must match the full run. Requires `warehouse_id`.
+
 ### `compare_approaches_job.py` — rule engine vs. AI agreement
 The "regression vs. control" deliverable. Scoped to a single day (`compare_date`).
 `run()` joins `voc_classification_rule_tags` and an AI tags table on `id_verbatim`
@@ -164,9 +227,9 @@ compare models).
 
 ### Notebook entrypoints
 Thin wrappers that add the folder to `sys.path`, import the module, and call
-`run()`: `run_ai_query_sql_notebook.py`, `run_ai_classify_notebook.py`, and
-`run_compare_notebook.py` (run compare **after** the rule job and an AI job have
-produced their tag tables).
+`run()`: `run_ai_query_sql_notebook.py`, `run_ai_classify_notebook.py`,
+`run_ai_classify_incremental_notebook.py`, and `run_compare_notebook.py` (run compare
+**after** the rule job and an AI job have produced their tag tables).
 
 ---
 

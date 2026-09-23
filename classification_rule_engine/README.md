@@ -104,6 +104,40 @@ matching code runs locally (unit-tested) and inside the Spark job.
 
 ---
 
+## When to run the incremental job vs. a full refresh
+
+Editing a rule's **keywords** — including **adding a new keyword** — → run the
+**incremental** job (`incremental_rule_job.py`). It's built for exactly this. The
+instinct that "a new keyword could make *any* sentence qualify, so we must scan the
+whole table" is correct — but that does **not** mean a full refresh:
+
+- A rule-engine keyword is a **literal string**, so the incremental extracts the
+  *new* keyword and runs a **cheap `rlike` substring pre-filter across the whole
+  table** to find the rows that contain it (the **GAIN** candidates), plus the rows
+  currently tagged `1` in the changed column (the **LOSS** candidates).
+- It then runs the **full rule engine only on that bounded candidate set** — not on
+  all ~2M rows — and `MERGE`s the result in place. So adding `"snowfall"` re-evaluates
+  just the rows containing "snowfall" (+ the currently-tagged ones). Far cheaper than a
+  full refresh, and correct (the candidate set is a provable superset of what can change).
+
+**Run a FULL refresh (`voc_topic_model_job.py`) instead when:**
+
+| Situation | Why full |
+|---|---|
+| The **global scope filter** changed | Scope moves for *every* row — the incremental **aborts** and asks for a full run |
+| The new term **isn't a literal substring** — a proximity/fuzzy seed (`"…"~3`) or an attribute condition (`call_direction`, `cc_lob_mv`, …) | The incremental **auto-falls back to a full in-scope scan** of that column (`needs_full_scan`), so a full refresh is equivalent/cleaner |
+| **Many** categories changed at once, or you want a clean rebuild | Simpler to just re-run |
+| **No snapshot yet** (first run), or **adding/removing a whole category** you want fully populated | Nothing to diff / a new column spans all rows |
+
+**Why this is a rule-engine advantage:** the cheap GAIN detection works only because
+the rule *contains* the literal keyword. The `ai_classify` track has no literal term
+(its "rule" is a semantic `ai_description`), so a broadening there can't be pre-filtered
+— it needs a full re-score (`mode=full`) or a supplied keyword proxy (`mode=terms`). Same
+question, opposite answer, because of *what* the rule is. See
+[`../classification_ai/README.md`](../classification_ai/README.md).
+
+---
+
 ## File-by-file
 
 ### `rule_engine.py` — the query-language engine (the core)

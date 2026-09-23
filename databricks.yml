@@ -44,6 +44,16 @@ variables:
   rule_freq_table_name:
     default: voc_classification_rule_frequencies
 
+  # Rule set the rule-engine jobs (full + incremental) tag with. Empty = the
+  # default shared/category_model.json (v1). Set to another basename that ships
+  # in the bundle's shared/ (e.g. category_model_v2.json) to run/rerun both the
+  # full and incremental rule jobs against a different rule set — the two jobs
+  # read the SAME file, so v1 and v2 are each independently (re)runnable.
+  #   --var="category_model=category_model_v2.json"
+  category_model:
+    description: Rule-engine category model filename (empty = category_model.json / v1).
+    default: ""
+
   # ai_classify (v2.1, multi-label) output table name (name only; catalog/schema
   # prepended). Override to write a test run to a SEPARATE table. NOTE: must be a
   # valid identifier — NO dots (the job appends __scoped_tmp / __bysentence_tmp).
@@ -72,10 +82,10 @@ variables:
 
   # Distinct sentences the AI classification jobs send to the LLM. The DBSQL
   # ai_query job takes them MOST-FREQUENT-FIRST (max row coverage per call);
-  # 0 = all distinct for the day.
+  # 0 = all distinct for the day (default -> full-day coverage, no cap).
   ai_classify_sample_limit:
-    description: Max distinct sentences to classify (0 = all).
-    default: "100000"
+    description: Max distinct sentences to classify (0 = all, the default).
+    default: "0"
 
   # SQL warehouse for the DBSQL-batch AI classification paths (workspace-specific).
   # Required by voc_classification_ai_query_sql_job and voc_classification_ai_classify_job.
@@ -190,6 +200,8 @@ resources:
               freq_table: ${var.target_catalog}.${var.target_schema}.${var.rule_freq_table_name}
               date_start: ${var.date_start}
               date_end: ${var.date_end}
+              # Rule set to tag with (empty = category_model.json / v1).
+              category_model: ${var.category_model}
       queue:
         enabled: true
 
@@ -212,6 +224,13 @@ resources:
               tags_table: ${var.target_catalog}.${var.target_schema}.${var.rule_tags_table_name}
               freq_table: ${var.target_catalog}.${var.target_schema}.${var.rule_freq_table_name}
               snapshot_table: ${var.target_catalog}.${var.target_schema}.${var.rule_tags_table_name}__rules_snapshot
+              # Write the re-tagged result to a separate _incremental table (baseline
+              # preserved for before/after comparison). Set to "" to update in place.
+              output_table: ${var.target_catalog}.${var.target_schema}.${var.rule_tags_table_name}_incremental
+              # Rule set to diff + re-tag with (empty = category_model.json / v1).
+              # Set category_model=category_model_v2.json to re-tag the v1 baseline
+              # against the v2 rules.
+              category_model: ${var.category_model}
               # Set to "1" for a run that only (re)seeds the snapshot, then exits.
               seed_only: "0"
       queue:
@@ -272,6 +291,52 @@ resources:
               min_words: ${var.min_words}
               hour_start: ${var.hour_start}
               hour_end: ${var.hour_end}
+              # Label set to classify with (empty = category_model.json / v1).
+              category_model: ${var.category_model}
+      queue:
+        enabled: true
+
+    # ----------------------------------------------------------------------
+    # Classification (ai_classify) — INCREMENTAL re-tag after a label-DESCRIPTION
+    # change (the semantic analogue of the rule-engine incremental job). Diffs the
+    # target descriptions in category_model.json vs a snapshot and re-scores ONLY
+    # the changed label(s) over a bounded candidate set, MERGEing in place — instead
+    # of a full re-run over every label. First run seeds the snapshot (run the full
+    # ai_classify job first). Writes to the SAME table as the full job.
+    #   mode = full   (default; correct for any change — re-scores changed labels
+    #                  over all distinct in-scope sentences)
+    #        | narrow (cheap; restrictive changes only — currently-tagged rows)
+    #        | terms  (cheap broadening; set candidate_terms as a keyword proxy)
+    # Requires sql_warehouse_id. conf_threshold/enable_confidence MUST match the
+    # full ai_classify run (kept in sync here).
+    # ----------------------------------------------------------------------
+    voc_classification_ai_classify_incremental_job:
+      name: "[${bundle.target}] GM VOC Classification (ai_classify, incremental)"
+      tasks:
+        - task_key: classify_ai_classify_incremental
+          notebook_task:
+            notebook_path: ./classification_ai/run_ai_classify_incremental_notebook.py
+            base_parameters:
+              ai_tags_table: ${var.target_catalog}.${var.target_schema}.${var.ai_classify_tags_table_name}
+              snapshot_table: ${var.target_catalog}.${var.target_schema}.${var.ai_classify_tags_table_name}__desc_snapshot
+              # Write the re-tagged result to a separate _incremental table (baseline
+              # preserved for before/after comparison). Set to "" to update in place.
+              output_table: ${var.target_catalog}.${var.target_schema}.${var.ai_classify_tags_table_name}_incremental
+              warehouse_id: ${var.sql_warehouse_id}
+              # Candidate strategy: full | narrow | terms.
+              mode: "full"
+              # Optional: comma-separated target category NAMES to force re-scoring
+              # (overrides the snapshot diff). Empty = use the diff.
+              changed_labels: ""
+              # For mode=terms: comma-separated keyword proxy for GAIN candidates.
+              candidate_terms: ""
+              # Label set to diff + re-score against (empty = category_model.json / v1).
+              category_model: ${var.category_model}
+              # Set "1" to only (re)seed the description snapshot, then exit.
+              seed_only: "0"
+              # Keep matched to the full ai_classify run's confidence settings.
+              enable_confidence: "true"
+              conf_threshold: "0.0"
       queue:
         enabled: true
 
@@ -317,6 +382,37 @@ resources:
               comparison_table: ${var.target_catalog}.${var.target_schema}.voc_classification_comparison
               # Same day as the ai_classify run so both tables line up.
               compare_date: ${var.ai_classify_date}
+      queue:
+        enabled: true
+
+    # ----------------------------------------------------------------------
+    # Qualtrics validation — sentence-level comparison of each tagging method
+    # (rule engine / ai_classify / ai_query) vs the Qualtrics control output.
+    # Backfills sentence_id onto each method's tags (via the source table), joins
+    # to qualtrics_raw_outputs on sentence_id, and writes precision/recall/F1 per
+    # method x leaf to validation_qualtrics_vs_{ai_classify,ai_query,rule_engine}.
+    # Run AFTER the tag tables + qualtrics_raw_outputs exist.
+    # ----------------------------------------------------------------------
+    voc_qualtrics_validation_job:
+      name: "[${bundle.target}] GM VOC Qualtrics Validation (sentence-level)"
+      tasks:
+        - task_key: qualtrics_validation
+          notebook_task:
+            notebook_path: ./validation/qualtrics_validation_notebook.py
+            base_parameters:
+              source_table: ${var.catalog}.${var.schema}.${var.sentence_table_name}
+              qualtrics_table: ${var.target_catalog}.${var.target_schema}.qualtrics_raw_outputs
+              out_schema: ${var.target_catalog}.${var.target_schema}
+              ai_classify_tags: ${var.target_catalog}.${var.target_schema}.voc_classification_ai_classify_tags_full_day
+              ai_query_tags: ${var.target_catalog}.${var.target_schema}.voc_classification_ai_query_sql_tags
+              # The established rule-engine baseline validated against Qualtrics. NOTE:
+              # this was renamed from voc_classification_rule_tags_v2 -> voc_classification_rule_tags;
+              # the name voc_classification_rule_tags_v2 now holds the NEW client rules
+              # (category_model_v2.json), which is a SEPARATE validation, not this one.
+              rule_tags: ${var.target_catalog}.${var.target_schema}.voc_classification_rule_tags
+              classify_date: ${var.ai_classify_date}
+              hour_start: "9"
+              hour_end: "12"
       queue:
         enabled: true
 

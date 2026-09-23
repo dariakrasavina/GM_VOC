@@ -80,18 +80,24 @@ DEFAULTS = {
     # confidence (0 = no cap). Useful if a few sentences still over-tag after the
     # threshold; leave off once the threshold is calibrated.
     "max_labels": "0",
+    # Category model to read label names + descriptions from. Empty = the default
+    # shared/category_model.json (v1). Set to another basename synced with the
+    # bundle (e.g. category_model_v2.json) to classify against a different label
+    # set — same knob as the rule engine's category_model param.
+    "category_model": "",
     # REQUIRED for run(): the SQL warehouse that executes the batch SQL.
     "warehouse_id": "",
 }
 
-# Global task instructions for the managed model (max 20,000 chars). Mirrors the
-# ai_query prompt's guidance, minus the category list (labels carry definitions)
-# and the JSON-array formatting (v2.1 returns structured output itself).
-# These instructions PARAPHRASE the intent of GM's XM Discover swim-lane rules
-# (Include / And / Not lanes) for the four POC leaf categories WITHOUT copying the
-# keyword/negation lists - the managed model reads meaning, not regex, so we encode
-# each rule's INCLUDE intent and its main EXCLUDE traps in prose. Keep in sync with
-# the ai_query prompt in ai_common.build_prompt if that path is used.
+# Global, CATEGORY-AGNOSTIC task instructions for the managed model (max 20,000
+# chars). Per-category INCLUDE/EXCLUDE guidance lives in each target node's
+# `ai_description` in the category_model JSON (falling back to the customer's
+# `description` if absent) — load_categories reads it, the labels object carries it
+# to the model, and the incremental job can DIFF it. So adding or tightening a
+# category is an ai_description edit in the model file — no code change, and the
+# customer's `description` is left untouched. Keep THIS string to guidance that
+# applies to EVERY label (customer-only, ignore IVR/marketing, most sentences match
+# nothing). Mirrors the preamble of ai_common.build_prompt (the ai_query path).
 INSTRUCTIONS = (
     "You are labeling a customer's sentence from a call-center (contact center) "
     "transcript. Classify ONLY the customer's own words; ignore any automated system "
@@ -102,70 +108,8 @@ INSTRUCTIONS = (
     "generic or short clarifying questions that carry no category meaning (e.g. "
     "'What?', 'Huh?', 'Pardon me?', 'Get what?', 'I don't know.', 'I do not know "
     "what to do.', 'I'm not sure.', 'Okay.', 'Um.'). Those are NOT categories. "
-
-    # --- CC Advisor - Confusing/Makes No Sense --------------------------------
-    # Rule INCLUDE: confused/confusing/bewildered, unclear, nonsense, "makes no
-    # sense", "understand/explain why", "not enough / too much information", "that
-    # cannot be right". Rule NOT: apologies for confusion, positive "I understand
-    # why", filler "if that makes sense", "no nonsense"/"political nonsense", agent
-    # side, and (per description) dealer & Roadside. It is about the ADVISOR/info
-    # being confusing, not the customer's own uncertainty.
-    "Assign 'CC Advisor - Confusing/Makes No Sense' ONLY when the customer says the "
-    "advisor, or the information or instructions they were given, was confusing, "
-    "unclear, made no sense, was nonsense, or that they cannot understand or have "
-    "explained why something is the case - or that there was not enough (or far too "
-    "much) information to make sense of it (e.g. 'you are confusing me', 'that does "
-    "not make sense', 'this is unclear', 'I do not understand why that is'). Do NOT "
-    "assign it merely because the customer asks a question, sounds unsure, "
-    "hesitates, or says they do not know; nor for the advisor apologizing for "
-    "confusion, for positive/neutral phrasing ('I understand why', 'if that makes "
-    "sense'), or for the customer's own general uncertainty. Do NOT assign it for "
-    "confusion about a DEALER/dealership or ROADSIDE assistance (out of scope). "
-
-    # --- CC Advisor - Inaccurate Information ----------------------------------
-    # Rule INCLUDE: advisor gave incorrect/false/inaccurate/wrong/not-true
-    # information or directions, or put in wrong info. Rule NOT (large): the
-    # CUSTOMER gave/entered wrong info; app/website/sensor/GPS/display/system or a
-    # reading (tire pressure, fuel gauge, mileage, charge status); wrong
-    # number/button/name/person/vehicle/paperwork or data fields (account, billing,
-    # payment, card, vehicle info); dealer/salesperson/finance/technician; timing
-    # ("right now/away") or generic "something wrong".
-    "Assign 'CC Advisor - Inaccurate Information' ONLY when the customer says the "
-    "ADVISOR gave them information or directions that were incorrect, false, "
-    "inaccurate, not true, or wrong, or that the advisor entered/put in wrong "
-    "information (e.g. 'the advisor told me the wrong information', 'what you told me "
-    "was not true', 'you gave me the wrong directions'). Do NOT assign it when: the "
-    "CUSTOMER gave or entered the wrong information themselves; the problem is with "
-    "an app, website, sensor, GPS, display, or system, or with a reading such as "
-    "tire pressure, fuel gauge, mileage, or charge status; 'wrong' refers to a wrong "
-    "number, button, name, person, vehicle, or paperwork, or to a data field "
-    "(account, billing, payment, card, or vehicle information); the complaint is "
-    "about a dealer, salesperson, finance, or technician (out of scope, along with "
-    "Roadside); or 'not right'/'wrong' is about timing ('right now', 'right away') "
-    "or a generic 'something is wrong'. Do NOT assign it for mere dissatisfaction "
-    "with the outcome (e.g. 'that is not what I asked for') - that is not inaccurate "
-    "information unless the customer says the information itself was wrong. "
-
-    # --- Loyalty Rewards - Points ---------------------------------------------
-    # Rule INCLUDE: explicit reference to GM My Rewards points - points, reward/bonus
-    # points, point voucher. Rule NOT: non-rewards uses of "point(s)" ("point of
-    # view", "point out", "point of contact", "good point", compass/place names).
-    # Inquiries count, not only complaints.
-    "Assign 'Loyalty Rewards - Points' when the customer explicitly refers to or "
-    "INQUIRES about GM My Rewards points - their points balance, earning points, "
-    "reward or bonus points, point vouchers, or how points work. An inquiry or "
-    "question counts, not only a complaint, as long as rewards points are explicitly "
-    "mentioned. Do NOT assign it when 'point(s)' is used in a non-rewards sense "
-    "(e.g. 'point of view', 'point out', 'point of contact', 'that is a good point', "
-    "compass directions or place names). "
-
-    # --- Points - Redeem -------------------------------------------------------
-    # Rule INCLUDE: the above PLUS spending/redeeming points (redeem/redemption/use).
-    # Rule NOT: the advisor narrating the process on the customer's behalf.
-    "Assign 'Points - Redeem' when, in addition to referencing rewards points, the "
-    "customer talks about spending, using, or redeeming those points (e.g. redeeming "
-    "points for a service allowance). Do NOT assign it based on the advisor "
-    "describing the redemption process rather than the customer."
+    "Each category's definition states exactly when to assign it and what to "
+    "exclude - follow those definitions precisely."
 )
 
 # v2.1 return struct (missing optional fields become null via from_json).
@@ -180,26 +124,27 @@ if HERE not in sys.path:
 from ai_common import load_categories
 
 
-def build_labels_json():
+def build_labels_json(rules_path=None):
     """JSON object {category_name: definition} for the target (leaf) categories.
 
     v2.1 labels-with-descriptions format. Key = category name (1-100 chars),
     value = its business definition (0-1000 chars). Returned label `value`s are
-    these keys, which we map back to categories for roll-up.
+    these keys, which we map back to categories for roll-up. `rules_path` (the
+    category_model param) selects which model file the labels come from.
     """
-    target_labels, _, _, _, _ = load_categories()
+    target_labels, _, _, _, _ = load_categories(rules_path)
     # load_categories already trims descriptions; keep well under the 1000-char cap.
     return json.dumps({name: (desc or name)[:1000] for name, desc in target_labels.items()})
 
 
-def _trigger_cols():
+def _trigger_cols(rules_path=None):
     """[(category_id, [label names that turn it on]) ...] for the roll-up.
 
     A category's column is 1 when the returned labels overlap: the category's own
     name (if it is a target) plus the names of any target descendants (roll-up).
     Identical logic to ai_query_sql — the two share the same output shape.
     """
-    target_labels, name_to_id, all_ids, ancestors, meta = load_categories()
+    target_labels, name_to_id, all_ids, ancestors, meta = load_categories(rules_path)
     target_names = set(target_labels.keys())
     cols = []
     for cid in all_ids:
@@ -218,7 +163,8 @@ def _sql_array(names):
 
 
 def build_statements(params):
-    cols = _trigger_cols()
+    rules_path = params.get("category_model") or None
+    cols = _trigger_cols(rules_path)
 
     where = ("lower(language) = 'english' AND lower(id_source) = 'audio' "
              "AND lower(verbatimtype) = 'clientverbatim' "
@@ -234,7 +180,8 @@ def build_statements(params):
                   % (int(hs), int(he)))
     min_words = int(params.get("min_words") or 0)
     if min_words > 0:
-        where += " AND size(split(trim(%s), ' ')) >= %d" % (TEXT_FIELD, min_words)
+        # array_remove('') so runs of >1 space don't inflate the token count.
+        where += " AND size(array_remove(split(trim(%s), ' '), '')) >= %d" % (TEXT_FIELD, min_words)
     limit = int(params.get("sample_limit") or 0)
     lim = ("LIMIT %d" % limit) if limit > 0 else ""
     sample_mode = (params.get("sample_mode") or "random").strip().lower()
@@ -271,7 +218,7 @@ def build_statements(params):
 
     s_scoped = (
         "CREATE OR REPLACE TABLE %s AS "
-        "SELECT natural_id, id_document, id_verbatim, document_date, %s "
+        "SELECT natural_id, id_document, id_verbatim, sentence_id, document_date, %s "
         "FROM %s WHERE %s" % (scoped_tmp, TEXT_FIELD, sent, where))
 
     # The paid step: one ai_classify() per DISTINCT sentence. v2.1 multi-label with
@@ -310,7 +257,7 @@ def build_statements(params):
 
     s_final = (
         "CREATE OR REPLACE TABLE %s AS "
-        "SELECT s.natural_id, s.id_document, s.id_verbatim, s.document_date, s.%s, "
+        "SELECT s.natural_id, s.id_document, s.id_verbatim, s.sentence_id, s.document_date, s.%s, "
         "to_json(b.ai_labels) AS ai_labels, b.ai_result_json, b.ai_error, %s "
         "FROM %s s JOIN %s b ON s.%s = b.%s"
         % (tags, TEXT_FIELD, ", ".join(col_exprs),
@@ -319,7 +266,8 @@ def build_statements(params):
     drops = ["DROP TABLE IF EXISTS %s" % bysentence_tmp,
              "DROP TABLE IF EXISTS %s" % scoped_tmp]
     return {"scoped": s_scoped, "bysentence": s_bysentence, "final": s_final,
-            "drops": drops, "labels": build_labels_json(), "instructions": INSTRUCTIONS}
+            "drops": drops, "labels": build_labels_json(rules_path),
+            "instructions": INSTRUCTIONS}
 
 
 def get_params():

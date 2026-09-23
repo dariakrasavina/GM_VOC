@@ -1,5 +1,5 @@
 {
-  "source_workbook": "requirements/Qualtrics_Parent_and_Leaf_Nodes.xlsx",
+  "source_workbook": "retagging/(C) APM Master – EN V4.0-DBX nodes to test v2.xlsx",
   "global_filter": {
     "name": "DBX POC",
     "description": "All English contact center call transcripts excluding agent side of conversation",
@@ -58,10 +58,10 @@
       "comparison_target": true,
       "has_rules": true,
       "lanes": {
-        "keywords": "(confusion NOT (\"I apologize for confusion\"~3, \"sorry for confusion\"~2, \"sorry about confusion\"~2, \"no confusion\")), confused, confuses, confuse, ((confusing, confuseing) NOT (\"not confusing\"~1)), bewilder*, unclear, \"not enough info\", \"not enough information\", \"too much info\", \"too much information\", \"any sense\" \"make no sense\" \"makes no sense\" nonsense \"understand why\" \"explain why\" \"that cannot be right\"~1 \"that can not be right\"~1 \"no way that can be right\"",
+        "keywords": "(confusion NOT (\"I apologize for confusion\"~3, \"sorry for confusion\"~2, \"sorry about confusion\"~2, \"no confusion\")), confused, confuses, confuse, ((confusing, confuseing) NOT (\"not confusing\"~1)), bewilder*, unclear, \"not enough info\", \"not enough information\", \"too much info\", \"too much information\", \"any sense\" \"make no sense\" \"makes no sense\" \"not making sense\" nonsens* \"understand why\" \"explain why\" \"that cannot be right\"~1 \"that can not be right\"~1 \"no way that can be right\" perplex* mystif* \"lack clarity\"~2 \"mixed signals\" \"mixed message \" \"at a loss\" befuddle* \"not add up\" ((explanation, answer, response, said, mean*) AND (\"not clear\"~2)) \"not logical\"~2 illogical, bewilder* puzzl*",
         "and": "",
         "and2": "NOT(_verbatimtype:agentverbatim)",
-        "not": "\"sense of\", \"political nonsense\", ((\"I understand why\", \"we understand why\") NOT (\"not sure I understand\"~1, \"I do not understand\"~1, \"play me\")), \"no nonsense\", (\"does that make any sense\" NOT \"how does that\") ((\"not want to confuse\") NOT (\"was confusing\" \"is confusing\" \"am confused\")) ((\"you understand\"~2) NOT (confus*)), \"if that makes any sense\", \"if that makes sense\""
+        "not": "\"sense of\", \"political nonsense\", ((\"I understand why\", \"we understand why\") NOT (\"not sure I understand\"~1, \"I do not understand\"~1, \"play me\")), \"no nonsense\", (\"does that make any sense\" NOT \"how does that\") ((\"not want to confuse\") NOT (\"was confusing\" \"is confusing\" \"am confused\")) ((\"you understand\"~2) NOT (confus*)) \"any sense of\" \"will not clear\" \"did not clear\" \"clear the\" \"clear it\" \"I mean\""
       },
       "is_leaf": true
     },
@@ -90,16 +90,35 @@
       "name": "Loyalty",
       "path": [],
       "level": 2,
-      "description": "Any mentions related to GM rewards & loyalty programs\r\n\r\nINCLUDES: account, points, rewards website, marcus card/site, capital one",
+      "description": "Any mentions related to GM rewards & loyalty programs\n\nINCLUDES: account, points, rewards website, marcus card/site, capital one",
       "comparison_target": false,
       "has_rules": true,
       "lanes": {
-        "keywords": "\"gmr account\", reward, rewards, voucher*, \"loyalty program\", \"loyalty bonus\", \"mygmrewards.com\", \"mygmrewards\", gmr, \"marcus.com\" \"marcus .com\", \"experience.gm.com\", ((\"GM card\"~2, \"GM cards\"~2, \"BuyPower card\"~2, \"Chevy Card\", \"Chevrolet Card\", \"Buick Card\", \"GMC Card\", \"Cadillac Card\") NOT (\"gift card\", \"gift cards\")), \"Redeeming\", \"Redemption\", \"redeem\", \"next tier\", \"tier plan\", \"tier plans\", \"tier program\", \"tiers program\", \"tiers mean\", \"tier status\", \"different tiers\", \"tier member\", \"Silver tier\"~4, \"tier silver\"~4, \"Silver member\", \"Gold tier\"~4, \"tier gold\"~4, \"Gold member\", \"Platinum tier\"~4, \"tier platinum\"~4, \"Platinum member\", \"Appreciation program\", \"Earnings\", “marcus goldman”, \"marcus.com\", www.marcus.com, ((marcus) AND (gold*)), ((*goodwill*, \"good-will\") NOT (\"goodwill store\"~2, direction*, retail, donat*, locations, \"find goodwill\"~1, \"looking for goodwill\"~1)), \"vehicle purchase program\", ((private) AND (offer, offers, offering*, incentive*)), ((\"marcus\") AND (website, card, goldman, sachs, transfer*, access, \"changed over\", \"changed to\", \"turning over\", \"change to\", \"switch over\", \"switched over\", \"switching over\", \"capital one\", redirect*)), ((cc_lob_mv:*reward*) AND (points, account, loyal, loyalty)), ((points) AND (mybuick, mychevy, mychevrolet, mygmc, mycadillac, \"gm points\", \"chevy points\", \"chevrolet points\", \"cadillac points\", \"buick points\", \"my gmc\", \"my chevy\", \"my chevrolet\", \"my buick\", \"my cadillac\", earn, ))",
+        "keywords": "\"gmr account\", reward, rewards, voucher*, \"loyalty program\", \"loyalty bonus\", \"mygmrewards.com\", \"mygmrewards\", gmr, \"marcus.com\" \"marcus .com\", \"experience.gm.com\", ((\"GM card\"~2, \"GM cards\"~2, \"BuyPower card\"~2, \"Chevy Card\", \"Chevrolet Card\", \"Buick Card\", \"GMC Card\", \"Cadillac Card\") NOT (\"gift card\", \"gift cards\")), \"Redeeming\", \"Redemption\", \"redeem\", \"next tier\", \"tier plan\", \"tier plans\", \"tier program\", \"tiers program\", \"tiers mean\", \"tier status\", \"different tiers\", \"tier member\", \"Silver tier\"~4, \"tier silver\"~4, \"Silver member\", \"Gold tier\"~4, \"tier gold\"~4, \"Gold member\", \"Platinum tier\"~4, \"tier platinum\"~4, \"Platinum member\", \"Appreciation program\", \"Earnings\", _mtoken:\"MARCUS GOLDMAN\", _mtoken:MARCUS.COM, ((_mtoken:GOODWILL) NOT (\"goodwill store\"~2, direction*, retail, donat*, locations, \"find goodwill\"~1, \"looking for goodwill\"~1)), \"vehicle purchase program\", (_mtoken:PRIVATE AND (_mtoken:OFFER, _mtoken:OFFERING)), ((\"marcus\") AND (website, card, goldman, sachs, transfer*, access, \"changed over\", \"changed to\", \"turning over\", \"change to\", \"switch over\", \"switched over\", \"switching over\", \"capital one\", redirect*)), ((cc_lob_mv:*reward*, cc_lob:*reward*, cc_queuename:*reward*) AND (points, account, loyal, loyalty)), ((points) AND (mybuick, mychevy, mychevrolet, mygmc, mycadillac, \"gm points\", \"chevy points\", \"chevrolet points\", \"cadillac points\", \"buick points\", \"my gmc\", \"my chevy\", \"my chevrolet\", \"my buick\", \"my cadillac\", earn, ))",
         "and": "",
         "and2": "",
-        "not": "\"Points Ave\", \"shift points\", \"test points\", \"reward him\", \"reward her\", \"reward them\", \"cross points\", \"key points\", \"exclamation points\", \"points ct\", \"reward ct\", ((marcus*, \"Marcus Goldman\") AND (\"specialist\", \"this is\", \"name is\", \"transferring you\", \"transfer you\", \"transferred you\")) voucher*"
+        "not": "((cb_sentence_word_count:[0 TO 2]) NOT (q_9_primary_rv:*reward*)), \"Points Ave\", \"shift points\", \"test points\", \"reward him\", \"reward her\", \"reward them\", \"cross points\", \"key points\", \"exclamation points\", \"points ct\", \"reward ct\", ((marcus*, _mtoken:\"MARCUS GOLDMAN\") AND (\"specialist\", \"this is\", \"name is\", \"transferring you\", \"transfer you\", \"transferred you\")) voucher*"
       },
       "is_leaf": false
+    },
+    {
+      "id": "loyalty_card",
+      "name": "Loyalty - Card",
+      "path": [
+        "Loyalty"
+      ],
+      "level": 3,
+      "description": "DEFINITION: Mentions related to GM credit cards\n\nINCLUDE: GM, GMC, Buick, Chevy, Cadillac, marcus, and BuyPower cards; rewards tiers (silver, gold, platinum)",
+      "ai_description": "Assign 'Loyalty - Card' when the customer refers to a GM-branded credit card - the GM Card, GMC/Buick/Chevy/Cadillac Card, BuyPower Card, or the Marcus/Goldman Sachs account that backs it (applying for it, its rewards/earnings, balance, payments, or the card account). Do NOT assign for a generic gift card, a non-GM credit card, or when 'card' means an unrelated ID/key card.",
+      "comparison_target": true,
+      "has_rules": true,
+      "lanes": {
+        "keywords": "_mtoken:CARD, _mtoken:CARDMEMBER, _mtoken:\"CREDIT CARD\", _mtoken:CREDIT, \"GM Rewards Card\", \"GM Reward Card\", \"GM Card\", \"GM Extended Family Card\", \"BuyPower Business Card\", \"GM Business Card\", \"Business Card\", \"Chevy Card\", \"Chevrolet Card\", \"Buick Card\", \"GMC Card\", \"Cadillac Card\", _mtoken:MARCUS, _mtoken:\"MARCUS GOLDMAN\", _mtoken:MARCUS.COM, \"Tier\", \"Tiers\", \"Silver tier\", \"Silver member\", \"Gold tier\", \"Gold member\", \"Platinum tier\", \"Platinum member\"",
+        "and": "",
+        "and2": "",
+        "not": "\"car specialist\", \"my name is\", \"card specialist\", \" credit specialist\", \"specialist\", \"agent\", \"calling from Marcus\", \"thank you for calling\", \"San Marcus\", \"sensor\", \"thank you much\"~3, \"valves\", \"dealer business center\""
+      },
+      "is_leaf": true
     },
     {
       "id": "loyalty_rewards",
@@ -108,11 +127,11 @@
         "Loyalty"
       ],
       "level": 3,
-      "description": "DEFINITION: Mentions related to using and managing GM Rewards\r\n\r\nINCLUDE: account, points\r\n\r\nEXCLUDE: card, goodwill, private offer, VPP",
+      "description": "DEFINITION: Mentions related to using and managing GM Rewards\n\nINCLUDE: account, points\n\nEXCLUDE: card, goodwill, private offer, VPP",
       "comparison_target": false,
       "has_rules": true,
       "lanes": {
-        "keywords": "\"REWARDS@GM.COM\", \"Rewards ID\", \"*reward*\", \"My Rewards\", \"Bonus points\", (\"reward\" AND \"points\"), \"Reward points\", \"Redeeming\", \"Redemption\", \"redeem\", \"My Chevy rewards\", \"Chevy rewards\", \"Chevrolet rewards\", \"My GMC rewards\", \"GMC rewards\", \"My Cadillac rewards\", \"Cadillac rewards\", \"My Buick rewards\", \"Buick rewards\", \"Gm rewards\", \"Loyalty program\", \"Loyalty bonus\"",
+        "keywords": "_mtoken:REWARDS, _mtoken:REWARDS@GM.COM, _mtoken:\"REWARDS ID\", \"reward*\", \"My Rewards\", \"Bonus points\", (\"reward\" AND \"points\"), \"Reward points\", \"Redeeming\", \"Redemption\", \"redeem\", \"My Chevy rewards\", \"Chevy rewards\", \"Chevrolet rewards\", \"My GMC rewards\", \"GMC rewards\", \"My Cadillac rewards\", \"Cadillac rewards\", \"My Buick rewards\", \"Buick rewards\", \"Gm rewards\", \"Loyalty program\", \"Loyalty bonus\"",
         "and": "",
         "and2": "",
         "not": ""
@@ -127,7 +146,7 @@
         "Loyalty - Rewards"
       ],
       "level": 4,
-      "description": "DEFINITION: Mentions related to GM My Rewards points\r\nINCLUDES: explicit reference of points",
+      "description": "DEFINITION: Mentions related to GM My Rewards points\nINCLUDES: explicit reference of points",
       "ai_description": "Assign 'Loyalty Rewards - Points' when the customer explicitly refers to or INQUIRES about GM My Rewards points - their points balance, earning points, reward or bonus points, point vouchers, or how points work. An inquiry or question counts, not only a complaint, as long as rewards points are explicitly mentioned. Do NOT assign it when 'point(s)' is used in a non-rewards sense (e.g. 'point of view', 'point out', 'point of contact', 'that is a good point', compass directions or place names).",
       "comparison_target": true,
       "has_rules": true,
@@ -148,12 +167,12 @@
         "Loyalty Rewards - Points"
       ],
       "level": 5,
-      "description": "DEFINITION: See above with additional reference of spending / redeeming points e.g. for service allowance \r\nRESOURCES: https://www.mygmrewards.com/redeem",
+      "description": "DEFINITION: See above with additional reference of spending / redeeming points e.g. for service allowance \nRESOURCES: https://www.mygmrewards.com/redeem",
       "ai_description": "Assign 'Points - Redeem' when, in addition to referencing rewards points, the customer talks about spending, using, or redeeming those points (e.g. redeeming points for a service allowance). Do NOT assign it based on the advisor describing the redemption process rather than the customer.",
       "comparison_target": true,
       "has_rules": true,
       "lanes": {
-        "keywords": "redeem*",
+        "keywords": "redeem* use using used",
         "and": "point* reward*",
         "and2": "",
         "not": "\"redemption notice available\", \"congratulations on redeeming\", \"she is calling\", \"he is calling\", \"car specialist\", \"he is trying\", \"she is trying\", \"he was trying\", \"she was trying\", \"she is interested\", \"he is interested\", \"need your authorization\", \"redeem his points\", \"redeem her points\", \"redeeming his points\", \"redeeming her points\", \"customer is calling\", \"customer is trying\", \"customer was trying\", \"you can start earning points\", \"customer's points\"~1, \"you can earn and redeem\", \"have a customer\", \"he wants to redeem\", \"she wants to redeem\", \"you should be able to redeem\", \"what she can redeem\", \"what he can redeem\""

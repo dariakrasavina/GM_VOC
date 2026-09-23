@@ -17,18 +17,27 @@ import os
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-def find_category_model():
-    """Locate shared/category_model.json regardless of folder layout (repo vs. a
-    flat cluster upload where the modules + json are co-located)."""
+def find_category_model(filename=None):
+    """Locate a category-model JSON regardless of folder layout (repo vs. a flat
+    cluster upload where the modules + json are co-located).
+
+    `filename` may be None/"" (the default category_model.json / v1), a basename
+    (e.g. category_model_v2.json, resolved against the known dirs so the bundle's
+    shared/ copy is found), or an existing path (used as-is).
+    """
+    filename = (filename or "").strip()
+    if filename and os.path.exists(filename):
+        return filename
+    base = os.path.basename(filename) if filename else "category_model.json"
     repo = os.path.dirname(HERE)
-    for c in (os.path.join(HERE, "category_model.json"),
-              os.path.join(repo, "shared", "category_model.json"),
-              os.path.join(HERE, "shared", "category_model.json"),
-              os.path.join(os.getcwd(), "category_model.json"),
-              os.path.join(os.getcwd(), "shared", "category_model.json")):
+    for c in (os.path.join(HERE, base),
+              os.path.join(repo, "shared", base),
+              os.path.join(HERE, "shared", base),
+              os.path.join(os.getcwd(), base),
+              os.path.join(os.getcwd(), "shared", base)):
         if os.path.exists(c):
             return c
-    raise FileNotFoundError("category_model.json not found near %s" % HERE)
+    raise FileNotFoundError("%s not found near %s" % (base, HERE))
 
 
 def load_categories(rules_path=None):
@@ -41,8 +50,7 @@ def load_categories(rules_path=None):
       ancestors     : {category_id: [ancestor_id ...]}      (nearest parent first)
       meta          : {category_id: {name, path, is_target}}
     """
-    if rules_path is None:
-        rules_path = find_category_model()
+    rules_path = find_category_model(rules_path)
     with open(rules_path) as f:
         rules = json.load(f)
 
@@ -50,8 +58,14 @@ def load_categories(rules_path=None):
     target_labels = {}
     for node in rules["nodes"]:
         if node.get("comparison_target"):
-            desc = " ".join((node.get("description") or node["name"]).split())
-            target_labels[node["name"]] = desc[:400]
+            # Prefer `ai_description` (the classifier-facing definition with full
+            # include/exclude) when present; fall back to the customer-authored
+            # `description`. This keeps the customer's `description` untouched while
+            # letting the model files be the single source of truth for the AI
+            # tracks. 1000 = the ai_classify v2.1 label-description cap.
+            desc = " ".join((node.get("ai_description")
+                             or node.get("description") or node["name"]).split())
+            target_labels[node["name"]] = desc[:1000]
     ancestors = {}
     for n in rules["nodes"]:
         ancestors[n["id"]] = [name_to_id[a] for a in reversed(n.get("path", []))
@@ -74,10 +88,8 @@ def build_prompt(target_labels):
         "back-channel, acknowledgments, and generic or short clarifying questions "
         "(e.g. 'What?', 'Huh?', 'Pardon me?', 'Get what?', 'I don't know.', "
         "'Okay.', 'Um.'). Those are NOT categories.",
-        "Do NOT tag 'CC Advisor - Confusing/Makes No Sense' merely because the "
-        "customer asks a question or sounds unsure — tag it ONLY when the customer "
-        "explicitly says the advisor, information, or instructions were confusing "
-        "or made no sense.",
+        "Each category's definition below states exactly when to assign it and what "
+        "to exclude — follow those definitions precisely.",
         "If surrounding conversation is shown for context, classify ONLY the "
         "sentence marked between >>> and <<<; if no markers are present, classify "
         "the whole text.",

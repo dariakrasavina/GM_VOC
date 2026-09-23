@@ -139,10 +139,11 @@ def build_statements(params):
     # (2) content pre-filter: drop sentences shorter than min_words words.
     min_words = int(params.get("min_words") or 0)
     if min_words > 0:
-        where += " AND size(split(trim(%s), ' ')) >= %d" % (TEXT_FIELD, min_words)
+        # array_remove('') so runs of >1 space don't inflate the token count.
+        where += " AND size(array_remove(split(trim(%s), ' '), '')) >= %d" % (TEXT_FIELD, min_words)
     limit = int(params.get("sample_limit") or 0)
     lim = ("LIMIT %d" % limit) if limit > 0 else ""
-    sample_mode = (params.get("sample_mode") or "frequency").strip().lower()
+    sample_mode = (params.get("sample_mode") or "random").strip().lower()
     ctx_n = int(params.get("context_window") or 0)
 
     ep = params["classify_endpoint"]
@@ -152,7 +153,7 @@ def build_statements(params):
 
     s_scoped = (
         "CREATE OR REPLACE TABLE %s AS "
-        "SELECT natural_id, id_document, id_verbatim, document_date, %s "
+        "SELECT natural_id, id_document, id_verbatim, sentence_id, document_date, %s "
         "FROM %s WHERE %s" % (scoped_tmp, TEXT_FIELD, sent, where))
 
     # Per-category 0/1 columns (roll-up compiled to arrays_overlap), aliased to
@@ -174,7 +175,10 @@ def build_statements(params):
         # is for small quality-eval samples, not full-day scale. sample_mode=random
         # gives a representative sample; frequency doesn't apply per-row.
         byrow_tmp = tags + "__byrow_tmp"
-        win = "PARTITION BY id_verbatim ORDER BY document_date"
+        # ORDER BY sentence_id: document_date is document-level (constant within a
+        # call), so it can't order sentences; sentence_id gives the real neighbor
+        # sequence for the lag/lead context window.
+        win = "PARTITION BY id_verbatim ORDER BY sentence_id"
         parts = ["lag(%s, %d) OVER (%s)" % (TEXT_FIELD, i, win) for i in range(ctx_n, 0, -1)]
         parts += ["'>>>'", TEXT_FIELD, "'<<<'"]
         parts += ["lead(%s, %d) OVER (%s)" % (TEXT_FIELD, i, win) for i in range(1, ctx_n + 1)]
@@ -182,15 +186,15 @@ def build_statements(params):
         order = "ORDER BY rand()" if sample_mode == "random" else ""
         s_bysentence = (
             "CREATE OR REPLACE TABLE %s AS "
-            "SELECT natural_id, id_document, id_verbatim, document_date, %s, "
+            "SELECT natural_id, id_document, id_verbatim, sentence_id, document_date, %s, "
             "from_json(CAST(ai_query('%s', concat(:prompt, ctx)) AS STRING), "
             "'array<string>') AS ai_categories "
-            "FROM (SELECT natural_id, id_document, id_verbatim, document_date, %s, "
+            "FROM (SELECT natural_id, id_document, id_verbatim, sentence_id, document_date, %s, "
             "%s AS ctx FROM %s %s %s)"
             % (byrow_tmp, TEXT_FIELD, ep, TEXT_FIELD, ctx_expr, scoped_tmp, order, lim))
         s_final = (
             "CREATE OR REPLACE TABLE %s AS "
-            "SELECT b.natural_id, b.id_document, b.id_verbatim, b.document_date, b.%s, "
+            "SELECT b.natural_id, b.id_document, b.id_verbatim, b.sentence_id, b.document_date, b.%s, "
             "to_json(b.ai_categories) AS ai_categories, %s FROM %s b"
             % (tags, TEXT_FIELD, _col_exprs("b"), byrow_tmp))
         drops = ["DROP TABLE IF EXISTS %s" % byrow_tmp,
@@ -217,7 +221,7 @@ def build_statements(params):
         % (bysentence_tmp, TEXT_FIELD, ep, TEXT_FIELD, inner))
     s_final = (
         "CREATE OR REPLACE TABLE %s AS "
-        "SELECT s.natural_id, s.id_document, s.id_verbatim, s.document_date, s.%s, "
+        "SELECT s.natural_id, s.id_document, s.id_verbatim, s.sentence_id, s.document_date, s.%s, "
         "to_json(b.ai_categories) AS ai_categories, %s "
         "FROM %s s JOIN %s b ON s.%s = b.%s"
         % (tags, TEXT_FIELD, _col_exprs("b"),

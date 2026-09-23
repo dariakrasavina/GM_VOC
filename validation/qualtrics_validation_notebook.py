@@ -220,29 +220,43 @@ compare_and_write("voc_classification_rule_tags_20260611_sid",        "rule_engi
 # MAGIC run); `ai_query_ran` = 1 flags the rows where it produced output.
 
 # COMMAND ----------
-# Short, readable per-leaf name for the four side-by-side columns.
+# Short, readable per-leaf name for the side-by-side columns.
 SHORT = {"cc_advisor_confusing_makes_no_sense": "confusing",
          "cc_advisor_inaccurate_information":   "inaccurate",
-         "points_redeem":                       "points"}
+         "points_redeem":                       "points",
+         "loyalty_rewards_points":              "loyalty_points"}
+
+# Categories shown side-by-side across the methods but NOT compared to Qualtrics:
+# Qualtrics has no "Loyalty Rewards - Points" category, so there is no ground-truth
+# column for it (only rule / ai_classify / ai_query columns are emitted). "Points -
+# Redeem" (points_redeem) remains the fully-compared points category (incl. qualtrics).
+METHOD_ONLY = [("loyalty_rewards_points", "loyalty_points")]
 
 def sentence_by_sentence(out_table="validation_sentence_by_sentence"):
-    # Qualtrics pivoted to 0/1 per leaf, keyed by sentence_id.
+    # Qualtrics pivoted to 0/1 per COMPARED leaf, keyed by sentence_id.
     qcase = ", ".join(
         f"MAX(CASE WHEN Category_Name='{disp}' THEN 1 ELSE 0 END) q_{SHORT[col]}"
         for col, disp in LEAVES)
-    # Each method's _sid contributes its leaf columns, keyed by sentence_id.
+    # Each method's _sid contributes its leaf columns (compared + method-only), by sentence_id.
     def method_cte(sid_table, pfx):
-        cols = ", ".join(f"{col} {pfx}_{SHORT[col]}" for col, _ in LEAVES)
+        cols = ", ".join(f"{col} {pfx}_{SHORT[col]}" for col, _ in LEAVES + METHOD_ONLY)
         return f"SELECT sentence_id, {cols} FROM {out}.{sid_table}"
-    # Projection: each leaf four ways. qualtrics / rule / ai_classify -> COALESCE to 0 (they
-    # cover the full day, so a missing row = "not tagged" = 0). ai_query -> left NULL outside
-    # its hour window (genuinely not run; see document_date_ts + ai_query_ran).
+    # Projection. Compared leaves: four ways (qualtrics / rule / ai_classify / ai_query).
+    # qualtrics / rule / ai_classify -> COALESCE to 0 (they cover the full day, so a missing
+    # row = "not tagged" = 0); ai_query -> left NULL outside its hour window (genuinely not
+    # run; see document_date_ts + ai_query_ran).
     proj = ", ".join(
         f"COALESCE(q.q_{SHORT[col]},0) AS {SHORT[col]}_qualtrics, "
         f"COALESCE(r.r_{SHORT[col]},0) AS {SHORT[col]}_rule, "
         f"COALESCE(a.a_{SHORT[col]},0) AS {SHORT[col]}_ai_classify, "
         f"y.y_{SHORT[col]} AS {SHORT[col]}_ai_query"
         for col, _ in LEAVES)
+    # Method-only categories: three ways (no qualtrics column — no ground truth).
+    proj += ", " + ", ".join(
+        f"COALESCE(r.r_{SHORT[col]},0) AS {SHORT[col]}_rule, "
+        f"COALESCE(a.a_{SHORT[col]},0) AS {SHORT[col]}_ai_classify, "
+        f"y.y_{SHORT[col]} AS {SHORT[col]}_ai_query"
+        for col, _ in METHOD_ONLY)
     # Spine = the SOURCE sentences for the day (audio, client-side, English), one row per
     # native sentence_id. Every method LEFT-joins onto it by sentence_id.
     spark.sql(f"""
